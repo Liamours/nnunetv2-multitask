@@ -65,6 +65,10 @@ class nnUNetPredictor(object):
         self.device = device
         self.perform_everything_on_device = perform_everything_on_device
 
+    @property
+    def is_multitask(self) -> bool:
+        return getattr(self.label_manager, 'is_multitask', False)
+
     def initialize_from_trained_model_folder(self, model_training_output_dir: str,
                                              use_folds: Union[Tuple[Union[int, str]], None],
                                              checkpoint_name: str = 'checkpoint_final.pth'):
@@ -477,7 +481,11 @@ class nnUNetPredictor(object):
 
         if self.verbose:
             print('predicting')
-        predicted_logits = self.predict_logits_from_preprocessed_data(dct['data']).cpu()
+        predicted_logits = self.predict_logits_from_preprocessed_data(dct['data'])
+        if isinstance(predicted_logits, dict):
+            predicted_logits = {k: v.cpu() for k, v in predicted_logits.items()}
+        else:
+            predicted_logits = predicted_logits.cpu()
 
         if self.verbose:
             print('resampling to original shape')
@@ -522,12 +530,25 @@ class nnUNetPredictor(object):
             # second iteration to crash due to OOM. Grabbing that with try except cause way more bloated code than
             # this actually saves computation time
             if prediction is None:
-                prediction = self.predict_sliding_window_return_logits(data).to('cpu')
+                prediction = self.predict_sliding_window_return_logits(data)
+                if isinstance(prediction, dict):
+                    prediction = {k: v.to('cpu') for k, v in prediction.items()}
+                else:
+                    prediction = prediction.to('cpu')
             else:
-                prediction += self.predict_sliding_window_return_logits(data).to('cpu')
+                current_prediction = self.predict_sliding_window_return_logits(data)
+                if isinstance(prediction, dict):
+                    for task_name in prediction.keys():
+                        prediction[task_name] += current_prediction[task_name].to('cpu')
+                else:
+                    prediction += current_prediction.to('cpu')
 
         if len(self.list_of_parameters) > 1:
-            prediction /= len(self.list_of_parameters)
+            if isinstance(prediction, dict):
+                for task_name in prediction.keys():
+                    prediction[task_name] /= len(self.list_of_parameters)
+            else:
+                prediction /= len(self.list_of_parameters)
 
         if self.verbose:
             print('Prediction done')
@@ -585,8 +606,17 @@ class nnUNetPredictor(object):
                 c for i in range(len(mirror_axes)) for c in itertools.combinations(mirror_axes, i + 1)
             ]
             for axes in axes_combinations:
-                prediction += torch.flip(self.network(torch.flip(x, axes)), axes)
-            prediction /= (len(axes_combinations) + 1)
+                mirrored_prediction = self.network(torch.flip(x, axes))
+                if isinstance(prediction, dict):
+                    for task_name in prediction.keys():
+                        prediction[task_name] += torch.flip(mirrored_prediction[task_name], axes)
+                else:
+                    prediction += torch.flip(mirrored_prediction, axes)
+            if isinstance(prediction, dict):
+                for task_name in prediction.keys():
+                    prediction[task_name] /= (len(axes_combinations) + 1)
+            else:
+                prediction /= (len(axes_combinations) + 1)
         return prediction
 
     @torch.inference_mode()
@@ -617,9 +647,19 @@ class nnUNetPredictor(object):
             # preallocate arrays
             if self.verbose:
                 print(f'preallocating results arrays on device {results_device}')
-            predicted_logits = torch.zeros((self.label_manager.num_segmentation_heads, *data.shape[1:]),
-                                           dtype=torch.half,
-                                           device=results_device)
+            if self.is_multitask:
+                predicted_logits = {
+                    task_name: torch.zeros(
+                        (self.label_manager.get_task_label_manager(task_name).num_segmentation_heads, *data.shape[1:]),
+                        dtype=torch.half,
+                        device=results_device,
+                    )
+                    for task_name in self.label_manager.task_order
+                }
+            else:
+                predicted_logits = torch.zeros((self.label_manager.num_segmentation_heads, *data.shape[1:]),
+                                               dtype=torch.half,
+                                               device=results_device)
             n_predictions = torch.zeros(data.shape[1:], dtype=torch.half, device=results_device)
 
             if self.use_gaussian:
@@ -639,23 +679,35 @@ class nnUNetPredictor(object):
                         queue.task_done()
                         break
                     workon, sl = item
-                    prediction = self._internal_maybe_mirror_and_predict(workon)[0].to(results_device)
+                    prediction = self._internal_maybe_mirror_and_predict(workon)
 
-                    if self.use_gaussian:
-                        prediction *= gaussian
-                    predicted_logits[sl] += prediction
+                    if isinstance(prediction, dict):
+                        for task_name, task_prediction in prediction.items():
+                            task_prediction = task_prediction[0].to(results_device)
+                            if self.use_gaussian:
+                                task_prediction *= gaussian
+                            predicted_logits[task_name][sl] += task_prediction
+                    else:
+                        prediction = prediction[0].to(results_device)
+                        if self.use_gaussian:
+                            prediction *= gaussian
+                        predicted_logits[sl] += prediction
                     n_predictions[sl[1:]] += gaussian
                     queue.task_done()
                     pbar.update()
             queue.join()
 
-            # predicted_logits /= n_predictions
-            torch.div(predicted_logits, n_predictions, out=predicted_logits)
-            # check for infs
-            if torch.any(torch.isinf(predicted_logits)):
-                raise RuntimeError('Encountered inf in predicted array. Aborting... If this problem persists, '
-                                   'reduce value_scaling_factor in compute_gaussian or increase the dtype of '
-                                   'predicted_logits to fp32')
+            if isinstance(predicted_logits, dict):
+                for task_name, task_prediction in predicted_logits.items():
+                    torch.div(task_prediction, n_predictions, out=task_prediction)
+                    if torch.any(torch.isinf(task_prediction)):
+                        raise RuntimeError('Encountered inf in predicted array. Aborting...')
+            else:
+                torch.div(predicted_logits, n_predictions, out=predicted_logits)
+                if torch.any(torch.isinf(predicted_logits)):
+                    raise RuntimeError('Encountered inf in predicted array. Aborting... If this problem persists, '
+                                       'reduce value_scaling_factor in compute_gaussian or increase the dtype of '
+                                       'predicted_logits to fp32')
             return predicted_logits
         except Exception as e:
             del predicted_logits, n_predictions, prediction, gaussian, workon
@@ -709,7 +761,13 @@ class nnUNetPredictor(object):
 
             empty_cache(self.device)
             # revert padding
-            predicted_logits = predicted_logits[(slice(None), *slicer_revert_padding[1:])]
+            if isinstance(predicted_logits, dict):
+                predicted_logits = {
+                    task_name: task_prediction[(slice(None), *slicer_revert_padding[1:])]
+                    for task_name, task_prediction in predicted_logits.items()
+                }
+            else:
+                predicted_logits = predicted_logits[(slice(None), *slicer_revert_padding[1:])]
         return predicted_logits
 
     def predict_from_files_sequential(self,

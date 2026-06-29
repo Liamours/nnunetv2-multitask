@@ -16,6 +16,7 @@ from batchgenerators.utilities.file_and_folder_operations import load_json, join
 from nnunetv2.imageio.reader_writer_registry import recursive_find_reader_writer_by_name
 from nnunetv2.utilities.find_class_by_name import recursive_find_python_class
 from nnunetv2.utilities.label_handling.label_handling import get_labelmanager_class_from_plans
+from nnunetv2.utilities.plans_handling.multitask_plans import get_multitask_config
 
 # see https://adamj.eu/tech/2021/05/13/python-type-hints-how-to-fix-circular-imports/
 from typing import TYPE_CHECKING
@@ -154,6 +155,14 @@ class ConfigurationManager(object):
     @property
     def pool_op_kernel_sizes(self) -> Tuple[Tuple[int, ...], ...]:
         return self.configuration['architecture']['arch_kwargs']['strides']
+
+    @property
+    def is_multitask(self) -> bool:
+        return self.configuration['architecture']['arch_kwargs'].get('multitask') is not None
+
+    @property
+    def multitask_config(self) -> dict:
+        return get_multitask_config(self)
 
     @property
     @lru_cache(maxsize=1)
@@ -313,6 +322,8 @@ class PlansManager(object):
         return get_labelmanager_class_from_plans(self.plans)
 
     def get_label_manager(self, dataset_json: dict, **kwargs) -> LabelManager:
+        if getattr(self.label_manager_class, 'expects_multitask_tasks', False):
+            kwargs['multitask_tasks'] = dataset_json.get('multitask', {}).get('tasks', {})
         return self.label_manager_class(label_dict=dataset_json['labels'],
                                         regions_class_order=dataset_json.get('regions_class_order'),
                                         **kwargs)

@@ -18,6 +18,18 @@ def convert_predicted_logits_to_segmentation_with_correct_shape(predicted_logits
                                                                 properties_dict: dict,
                                                                 return_probabilities: bool = False,
                                                                 num_threads_torch: int = default_num_processes):
+    if isinstance(predicted_logits, dict) or getattr(label_manager, 'is_multitask', False):
+        from nnunetv2.inference.export_prediction_multitask import \
+            convert_predicted_logits_to_segmentation_with_correct_shape_multitask
+        return convert_predicted_logits_to_segmentation_with_correct_shape_multitask(
+            predicted_logits,
+            plans_manager,
+            configuration_manager,
+            label_manager,
+            properties_dict,
+            return_probabilities=return_probabilities,
+            num_threads_torch=num_threads_torch,
+        )
     old_threads = torch.get_num_threads()
     torch.set_num_threads(num_threads_torch)
 
@@ -89,6 +101,18 @@ def export_prediction_from_logits(predicted_array_or_file: Union[np.ndarray, tor
         dataset_json_dict_or_file = load_json(dataset_json_dict_or_file)
 
     label_manager = plans_manager.get_label_manager(dataset_json_dict_or_file)
+    if isinstance(predicted_array_or_file, dict) or getattr(label_manager, 'is_multitask', False):
+        from nnunetv2.inference.export_prediction_multitask import export_prediction_from_logits_multitask
+        return export_prediction_from_logits_multitask(
+            predicted_array_or_file,
+            properties_dict,
+            configuration_manager,
+            plans_manager,
+            dataset_json_dict_or_file,
+            output_file_truncated,
+            save_probabilities=save_probabilities,
+            num_threads_torch=num_threads_torch,
+        )
     ret = convert_predicted_logits_to_segmentation_with_correct_shape(
         predicted_array_or_file, plans_manager, configuration_manager, label_manager, properties_dict,
         return_probabilities=save_probabilities, num_threads_torch=num_threads_torch
@@ -122,6 +146,10 @@ def resample_and_save(predicted: Union[torch.Tensor, np.ndarray], target_shape: 
     if isinstance(dataset_json_dict_or_file, str):
         dataset_json_dict_or_file = load_json(dataset_json_dict_or_file)
 
+    label_manager = plans_manager.get_label_manager(dataset_json_dict_or_file)
+    if getattr(label_manager, 'is_multitask', False):
+        raise NotImplementedError("Multi-task next-stage resampling is not implemented in v1.")
+
     spacing_transposed = [properties_dict['spacing'][i] for i in plans_manager.transpose_forward]
     # resample to original shape
     current_spacing = configuration_manager.spacing if \
@@ -136,7 +164,6 @@ def resample_and_save(predicted: Union[torch.Tensor, np.ndarray], target_shape: 
                                                                                 target_spacing)
 
     # create segmentation (argmax, regions, etc)
-    label_manager = plans_manager.get_label_manager(dataset_json_dict_or_file)
     segmentation = label_manager.convert_logits_to_segmentation(predicted_array_or_file)
     # segmentation may be torch.Tensor but we continue with numpy
     if isinstance(segmentation, torch.Tensor):
