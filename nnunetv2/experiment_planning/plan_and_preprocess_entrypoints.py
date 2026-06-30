@@ -2,6 +2,47 @@ from nnunetv2.configuration import default_num_processes
 from nnunetv2.experiment_planning.plan_and_preprocess_api import extract_fingerprints, plan_experiments, preprocess
 
 
+def _parse_multitask_tasks(task_specs):
+    if task_specs is None:
+        return None
+    tasks = []
+    for spec in task_specs:
+        parts = spec.split(":")
+        if len(parts) not in (2, 3):
+            raise ValueError(
+                "Each --multitask_task must be formatted as name:num_classes[:loss_weight]. "
+                f"Got: {spec}"
+            )
+        task = {
+            "name": parts[0],
+            "num_classes": int(parts[1]),
+        }
+        if len(parts) == 3:
+            task["loss_weight"] = float(parts[2])
+        tasks.append(task)
+    if len(tasks) != 2:
+        raise ValueError("Multi-task v1 requires exactly two --multitask_task entries.")
+    return tasks
+
+
+def _add_multitask_planner_args(parser):
+    parser.add_argument('--multitask_variant', required=False, choices=['dual_head', 'dual_decoder'],
+                        help='[OPTIONAL] Multi-task architecture variant. Only supported by MultiTaskExperimentPlanner.')
+    parser.add_argument('--multitask_task', required=False, action='append',
+                        help='[OPTIONAL] Multi-task spec formatted as name:num_classes[:loss_weight]. '
+                             'Repeat exactly twice. Only supported by MultiTaskExperimentPlanner.')
+
+
+def _collect_multitask_planner_kwargs(args):
+    planner_kwargs = {}
+    if args.multitask_variant is not None:
+        planner_kwargs['multitask_variant'] = args.multitask_variant
+    multitask_tasks = _parse_multitask_tasks(args.multitask_task)
+    if multitask_tasks is not None:
+        planner_kwargs['multitask_tasks'] = multitask_tasks
+    return planner_kwargs or None
+
+
 def _add_logging_args(parser):
     parser.add_argument('--verbose', required=False, action='store_true',
                         help='Set this to print a lot of stuff. Useful for debugging.')
@@ -68,9 +109,11 @@ def plan_experiment_entry():
                              'differently named plans file such that the nnunet default plans are not '
                              'overwritten. You will then need to specify your custom plans file with -p whenever '
                              'running other nnunet commands (training, inference etc)')
+    _add_multitask_planner_args(parser)
     args, unrecognized_args = parser.parse_known_args()
+    planner_kwargs = _collect_multitask_planner_kwargs(args)
     plan_experiments(args.d, args.pl, args.gpu_memory_target, args.preprocessor_name, args.overwrite_target_spacing,
-                     args.overwrite_plans_name)
+                     args.overwrite_plans_name, planner_kwargs)
 
 
 def preprocess_entry():
@@ -159,6 +202,7 @@ def plan_and_preprocess_entry():
                              'differently named plans file such that the nnunet default plans are not '
                              'overwritten. You will then need to specify your custom plans file with -p whenever '
                              'running other nnunet commands (training, inference etc)')
+    _add_multitask_planner_args(parser)
     parser.add_argument('-c', required=False, default=['2d', '3d_fullres', '3d_lowres'], nargs='+',
                         help='[OPTIONAL] Configurations for which the preprocessing should be run. Default: 2d 3d_fullres '
                              '3d_lowres. 3d_cascade_fullres does not need to be specified because it uses the data '
@@ -177,6 +221,7 @@ def plan_and_preprocess_entry():
                              "for 3d_fullres, 8 for 3d_lowres and 4 for everything else")
     _add_logging_args(parser)
     args = parser.parse_args()
+    planner_kwargs = _collect_multitask_planner_kwargs(args)
 
     # fingerprint extraction
     print("Fingerprint extraction...")
@@ -186,7 +231,7 @@ def plan_and_preprocess_entry():
     # experiment planning
     print('Experiment planning...')
     plans_identifier = plan_experiments(args.d, args.pl, args.gpu_memory_target, args.preprocessor_name,
-                                        args.overwrite_target_spacing, args.overwrite_plans_name)
+                                        args.overwrite_target_spacing, args.overwrite_plans_name, planner_kwargs)
 
     # manage default np
     if args.np is None:

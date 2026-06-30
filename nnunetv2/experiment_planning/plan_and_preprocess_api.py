@@ -1,3 +1,4 @@
+import inspect
 from typing import List, Type, Optional, Tuple, Union
 
 from batchgenerators.utilities.file_and_folder_operations import join, maybe_mkdir_p, load_json
@@ -55,7 +56,8 @@ def plan_experiment_dataset(dataset_id: int,
                             experiment_planner_class: Type[ExperimentPlanner] = ExperimentPlanner,
                             gpu_memory_target_in_gb: float = None, preprocess_class_name: str = 'DefaultPreprocessor',
                             overwrite_target_spacing: Optional[Tuple[float, ...]] = None,
-                            overwrite_plans_name: Optional[str] = None) -> Tuple[dict, str]:
+                            overwrite_plans_name: Optional[str] = None,
+                            planner_kwargs: Optional[dict] = None) -> Tuple[dict, str]:
     """
     overwrite_target_spacing ONLY applies to 3d_fullres and 3d_cascade fullres!
     """
@@ -64,6 +66,14 @@ def plan_experiment_dataset(dataset_id: int,
         kwargs['plans_name'] = overwrite_plans_name
     if gpu_memory_target_in_gb is not None:
         kwargs['gpu_memory_target_in_gb'] = gpu_memory_target_in_gb
+    if planner_kwargs:
+        planner_init_parameters = inspect.signature(experiment_planner_class.__init__).parameters
+        unsupported_kwargs = [k for k in planner_kwargs.keys() if k not in planner_init_parameters]
+        if unsupported_kwargs:
+            raise ValueError(
+                f"Planner {experiment_planner_class.__name__} does not support arguments: {unsupported_kwargs}"
+            )
+        kwargs.update(planner_kwargs)
 
     planner = experiment_planner_class(dataset_id,
                                        preprocessor_name=preprocess_class_name,
@@ -79,7 +89,8 @@ def plan_experiment_dataset(dataset_id: int,
 def plan_experiments(dataset_ids: List[int], experiment_planner_class_name: str = 'ExperimentPlanner',
                      gpu_memory_target_in_gb: float = None, preprocess_class_name: str = 'DefaultPreprocessor',
                      overwrite_target_spacing: Optional[Tuple[float, ...]] = None,
-                     overwrite_plans_name: Optional[str] = None):
+                     overwrite_plans_name: Optional[str] = None,
+                     planner_kwargs: Optional[dict] = None):
     """
     overwrite_target_spacing ONLY applies to 3d_fullres and 3d_cascade fullres!
     """
@@ -96,7 +107,8 @@ def plan_experiments(dataset_ids: List[int], experiment_planner_class_name: str 
     for d in dataset_ids:
         _, plans_identifier = plan_experiment_dataset(d, experiment_planner, gpu_memory_target_in_gb,
                                                       preprocess_class_name,
-                                                      overwrite_target_spacing, overwrite_plans_name)
+                                                      overwrite_target_spacing, overwrite_plans_name,
+                                                      planner_kwargs)
     return plans_identifier
 
 

@@ -27,10 +27,33 @@ class nnUNetTrainerMultiTask(nnUNetTrainer):
             raise TypeError("nnUNetTrainerMultiTask requires MultiTaskLabelManager.")
         self.task_names = self.label_manager.task_order
         self.multitask_config = self.configuration_manager.multitask_config
+        self._validate_task_config_matches_labels()
         self.task_loss_weights = {
             task.get("name", f"task{i + 1}"): float(task.get("loss_weight", 1.0))
             for i, task in enumerate(self.multitask_config["tasks"])
         }
+
+    def _validate_task_config_matches_labels(self):
+        plan_heads = {
+            task.get("name", f"task{i + 1}"): int(task["num_classes"])
+            for i, task in enumerate(self.multitask_config["tasks"])
+        }
+        label_heads = self.label_manager.task_num_segmentation_heads()
+        if set(plan_heads) != set(label_heads):
+            raise ValueError(
+                "Multitask plans and dataset_json define different task names. "
+                f"Plans: {sorted(plan_heads)}. dataset_json: {sorted(label_heads)}."
+            )
+        mismatched_heads = {
+            task_name: (plan_heads[task_name], label_heads[task_name])
+            for task_name in plan_heads
+            if plan_heads[task_name] != label_heads[task_name]
+        }
+        if mismatched_heads:
+            raise ValueError(
+                "Multitask plans num_classes must match dataset_json task label heads. "
+                f"Mismatches: {mismatched_heads}."
+            )
 
     def _split_targets(self, target):
         if isinstance(target, list):

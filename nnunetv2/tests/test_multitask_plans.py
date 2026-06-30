@@ -1,5 +1,13 @@
 import unittest
+from copy import deepcopy
 
+import torch
+
+from nnunetv2.experiment_planning.experiment_planners.default_experiment_planner import ExperimentPlanner
+from nnunetv2.experiment_planning.experiment_planners.multitask_experiment_planner import MultiTaskExperimentPlanner
+from nnunetv2.experiment_planning.plan_and_preprocess_api import plan_experiment_dataset
+from nnunetv2.experiment_planning.plan_and_preprocess_entrypoints import _parse_multitask_tasks
+from nnunetv2.training.nnUNetTrainer.nnUNetTrainerMultiTask import nnUNetTrainerMultiTask
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
 
 
@@ -78,6 +86,12 @@ def make_test_dataset_json():
     }
 
 
+def make_trainer_test_plans():
+    plans = make_test_plans()
+    plans["continue_training"] = False
+    return plans
+
+
 class TestMultiTaskPlans(unittest.TestCase):
     def test_configuration_and_label_manager_are_multitask(self):
         plans_manager = PlansManager(make_test_plans())
@@ -91,6 +105,51 @@ class TestMultiTaskPlans(unittest.TestCase):
         self.assertTrue(label_manager.is_multitask)
         self.assertEqual(label_manager.task_order, ["task1", "task2"])
         self.assertEqual(label_manager.task_num_segmentation_heads(), {"task1": 2, "task2": 3})
+
+    def test_multitask_cli_task_parser(self):
+        tasks = _parse_multitask_tasks(["lesion:3:0.8", "bone:13:0.2"])
+
+        self.assertEqual(tasks, [
+            {"name": "lesion", "num_classes": 3, "loss_weight": 0.8},
+            {"name": "bone", "num_classes": 13, "loss_weight": 0.2},
+        ])
+
+    def test_multitask_cli_task_parser_requires_two_tasks(self):
+        with self.assertRaisesRegex(ValueError, "exactly two"):
+            _parse_multitask_tasks(["lesion:3"])
+
+    def test_planner_kwargs_are_validated_before_dataset_access(self):
+        with self.assertRaisesRegex(ValueError, "does not support arguments"):
+            plan_experiment_dataset(
+                999,
+                ExperimentPlanner,
+                planner_kwargs={"multitask_variant": "dual_decoder"},
+            )
+
+        try:
+            plan_experiment_dataset(
+                999,
+                MultiTaskExperimentPlanner,
+                planner_kwargs={"multitask_variant": "dual_decoder"},
+            )
+        except ValueError:
+            raise
+        except Exception:
+            pass
+
+    def test_trainer_rejects_plan_dataset_json_task_name_mismatch(self):
+        dataset_json = deepcopy(make_test_dataset_json())
+        dataset_json["multitask"]["tasks"]["other"] = dataset_json["multitask"]["tasks"].pop("task2")
+
+        with self.assertRaisesRegex(ValueError, "different task names"):
+            nnUNetTrainerMultiTask(make_trainer_test_plans(), "3d_fullres", 0, dataset_json, device=torch.device("cpu"))
+
+    def test_trainer_rejects_plan_dataset_json_head_count_mismatch(self):
+        dataset_json = deepcopy(make_test_dataset_json())
+        dataset_json["multitask"]["tasks"]["task2"]["labels"] = {"background": 0, "organ_a": 1}
+
+        with self.assertRaisesRegex(ValueError, "num_classes must match"):
+            nnUNetTrainerMultiTask(make_trainer_test_plans(), "3d_fullres", 0, dataset_json, device=torch.device("cpu"))
 
 
 if __name__ == "__main__":
