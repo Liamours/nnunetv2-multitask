@@ -12,17 +12,18 @@ Modify the nnU-Net v2 pipeline to support multi-task segmentation with:
 
 ## Current status
 
-Implemented baseline multi-task support:
-- generic two-task `dual_head`
-- generic two-task `dual_decoder`
-- multitask plans/config parsing
-- multitask trainer and loss wrapper
-- per-task inference and export path
-- targeted tests and model checker
+Implemented:
+- generic two-task `dual_head` and `dual_decoder` architectures
+- configuration-driven multitask plans, trainer, loss, inference, export, and evaluation
+- optional CBAM attention for the supported ablations
+- paired anterior/posterior lesion and bone-region dataset conversion and preprocessing
+- targeted architecture, plans, inference, and raw-dataset tests
 
-Not implemented yet:
-- CBAM integration
-- LGUQ uncertainty scoring
-- dataset-specific WBS experiment pipeline
+Not implemented:
+- local-gradient or pixel-wise uncertainty quantification
 
 The fork should stay generic. WBS lesion/bone segmentation is a downstream use case, not a hardcoded project boundary.
+
+## Operational scripts
+
+Repository helpers are organized under [scripts/README.md](scripts/README.md). Data, checkpoints, logs, and generated evaluation artifacts remain outside the repository.

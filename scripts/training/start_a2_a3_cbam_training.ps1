@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
-$repoRoot = 'C:\Users\lulay\Desktop\nnunetv2-multitask\repo\nnunetv2-multitask'
-$runner = Join-Path $repoRoot 'run_a2_a3_cbam_full_train_sequential_20260713.ps1'
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$runner = Join-Path $PSScriptRoot 'train_a2_a3_cbam_sequential.ps1'
 $stdoutLog = Join-Path $repoRoot 'training_logs\\a2_a3_cbam_full_train_sequential_20260713.stdout.log'
 $stderrLog = Join-Path $repoRoot 'training_logs\\a2_a3_cbam_full_train_sequential_20260713.stderr.log'
 

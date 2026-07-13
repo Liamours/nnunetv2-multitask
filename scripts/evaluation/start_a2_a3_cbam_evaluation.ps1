@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
-$repoRoot = "C:\Users\lulay\Desktop\nnunetv2-multitask\repo\nnunetv2-multitask"
-$runner = Join-Path $repoRoot "run_a2_a3_cbam_evaluation_20260713.ps1"
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$runner = Join-Path $PSScriptRoot "evaluate_a2_a3_cbam_sequential.ps1"
 $logDir = Join-Path $repoRoot "evaluation_logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
