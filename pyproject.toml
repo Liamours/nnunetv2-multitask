@@ -1,7 +1,7 @@
 [project]
 name = "nnunetv2"
 version = "2.8.0"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 description = "nnU-Net is a framework for out-of-the box image segmentation."
 readme = "readme.md"
 license = { file = "LICENSE" }
@@ -30,7 +30,7 @@ keywords = [
     'nnunet'
 ]
 dependencies = [
-    "torch>=2.1.2,!=2.9.*",
+    "torch==2.5.1+cu121",
     "acvl-utils>=0.2.6,<0.3",  # 0.3 may bring breaking changes. Careful!
     "dynamic-network-architectures>=0.4.4,<0.5",
     "tqdm",
@@ -41,6 +41,7 @@ dependencies = [
     "scikit-image>=0.19.3",
     "SimpleITK>=2.2.1",
     "pandas",
+    "openpyxl",
     "graphviz",
     'tifffile',
     'requests',
@@ -79,16 +80,25 @@ nnUNetv2_export_model_to_zip = "nnunetv2.model_sharing.entry_points:export_pretr
 nnUNetv2_move_plans_between_datasets = "nnunetv2.experiment_planning.plans_for_pretraining.move_plans_between_datasets:entry_point_move_plans_between_datasets"
 nnUNetv2_evaluate_folder = "nnunetv2.evaluation.evaluate_predictions:evaluate_folder_entry_point"
 nnUNetv2_evaluate_simple = "nnunetv2.evaluation.evaluate_predictions:evaluate_simple_entry_point"
+nnUNetv2_evaluate_multitask = "nnunetv2.evaluation.evaluate_multitask_predictions:main"
+nnUNetv2_evaluate_lesion_only = "nnunetv2.evaluation.evaluate_lesion_only_predictions:main"
+nnUNetv2_statistical_tests_multitask = "nnunetv2.evaluation.statistical_tests_multitask:main"
 nnUNetv2_convert_MSD_dataset = "nnunetv2.dataset_conversion.convert_MSD_dataset:entry_point"
+nnUNetv2_convert_bs80k_multitask = "nnunetv2.dataset_conversion.Dataset260_BS80KLesionBoneMT:main"
+nnUNetv2_convert_bs80k_lesion_only = "nnunetv2.dataset_conversion.Dataset261_BS80KLesionOnly:main"
 
 [project.optional-dependencies]
 dev = [
     "pre-commit"
 ]
-intel_macos = [
-    "torch<2.3",
-    "numpy<2",
-]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
 
 [tool.setuptools.packages.find]
 include = ["nnunetv2*"]

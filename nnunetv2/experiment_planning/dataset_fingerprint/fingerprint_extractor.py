@@ -12,6 +12,7 @@ from nnunetv2.imageio.reader_writer_registry import determine_reader_writer_from
 from nnunetv2.paths import nnUNet_raw, nnUNet_preprocessed
 from nnunetv2.preprocessing.cropping.cropping import crop_to_nonzero
 from nnunetv2.utilities.dataset_name_id_conversion import maybe_convert_to_dataset_name
+from nnunetv2.utilities.multitask_dataset import load_multitask_label_stack, make_multitask_union_label
 from nnunetv2.utilities.utils import get_filenames_of_train_images_and_targets
 
 
@@ -92,7 +93,11 @@ class DatasetFingerprintExtractor(object):
                      num_samples: int = 10000):
         rw = reader_writer_class()
         images, properties_images = rw.read_images(image_files)
-        segmentation, properties_seg = rw.read_seg(segmentation_file)
+        if isinstance(segmentation_file, dict):
+            label_stack = load_multitask_label_stack(segmentation_file, rw)
+            segmentation = make_multitask_union_label(label_stack)
+        else:
+            segmentation, _ = rw.read_seg(segmentation_file)
 
         # we no longer crop and save the cropped images before this is run. Instead we run the cropping on the fly.
         # Downside is that we need to do this twice (once here and once during preprocessing). Upside is that we don't
@@ -132,7 +137,9 @@ class DatasetFingerprintExtractor(object):
             with multiprocessing.get_context("spawn").Pool(self.num_processes) as p:
                 for k in self.dataset.keys():
                     r.append(p.starmap_async(DatasetFingerprintExtractor.analyze_case,
-                                             ((self.dataset[k]['images'], self.dataset[k]['label'], reader_writer_class,
+                                             ((self.dataset[k]['images'],
+                                               self.dataset[k].get('multitask_labels', self.dataset[k]['label']),
+                                               reader_writer_class,
                                                num_foreground_samples_per_case),)))
                 remaining = list(range(len(self.dataset)))
                 # p is pretty nifti. If we kill workers they just respawn but don't do any work.

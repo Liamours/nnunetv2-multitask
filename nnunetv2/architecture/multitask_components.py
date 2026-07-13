@@ -9,6 +9,8 @@ from dynamic_network_architectures.building_blocks.simple_conv_blocks import Sta
 from torch import nn
 from torch.nn.modules.dropout import _DropoutNd
 
+from nnunetv2.architecture.cbam import CBAM
+
 
 class FeatureUNetDecoder(nn.Module):
     def __init__(
@@ -24,6 +26,7 @@ class FeatureUNetDecoder(nn.Module):
         nonlin: Union[None, Type[torch.nn.Module]] = None,
         nonlin_kwargs: dict = None,
         conv_bias: bool = None,
+        cbam: dict = None,
     ):
         super().__init__()
         self.deep_supervision = deep_supervision
@@ -44,7 +47,12 @@ class FeatureUNetDecoder(nn.Module):
 
         stages = []
         transpconvs = []
+        attention_blocks = []
         output_channels = []
+        cbam = cbam or {}
+        use_cbam = bool(cbam.get("enabled", False)) and bool(cbam.get("decoder", True))
+        cbam_reduction = int(cbam.get("reduction", cbam.get("reduction_ratio", 16)))
+        cbam_spatial_kernel_size = int(cbam.get("spatial_kernel_size", 7))
         for s in range(1, n_stages_encoder):
             input_features_below = encoder.output_channels[-s]
             input_features_skip = encoder.output_channels[-(s + 1)]
@@ -76,10 +84,16 @@ class FeatureUNetDecoder(nn.Module):
                     nonlin_first,
                 )
             )
+            attention_blocks.append(
+                CBAM(encoder.conv_op, input_features_skip, cbam_reduction, cbam_spatial_kernel_size)
+                if use_cbam
+                else nn.Identity()
+            )
             output_channels.append(input_features_skip)
 
         self.stages = nn.ModuleList(stages)
         self.transpconvs = nn.ModuleList(transpconvs)
+        self.attention_blocks = nn.ModuleList(attention_blocks)
         self.output_channels = output_channels[::-1]
 
     def forward(self, skips):
@@ -89,6 +103,7 @@ class FeatureUNetDecoder(nn.Module):
             x = self.transpconvs[s](lres_input)
             x = torch.cat((x, skips[-(s + 2)]), 1)
             x = self.stages[s](x)
+            x = self.attention_blocks[s](x)
             decoder_features.append(x)
             lres_input = x
         decoder_features = decoder_features[::-1]
@@ -105,6 +120,8 @@ class FeatureUNetDecoder(nn.Module):
         output = np.int64(0)
         for s in range(len(self.stages)):
             output += self.stages[s].compute_conv_feature_map_size(skip_sizes[-(s + 1)])
+            if hasattr(self.attention_blocks[s], "compute_conv_feature_map_size"):
+                output += self.attention_blocks[s].compute_conv_feature_map_size(skip_sizes[-(s + 1)])
             output += np.prod([self.encoder.output_channels[-(s + 2)], *skip_sizes[-(s + 1)]], dtype=np.int64)
         return output
 

@@ -26,7 +26,12 @@ class nnUNetTrainerMultiTask(nnUNetTrainer):
         if not isinstance(self.label_manager, MultiTaskLabelManager):
             raise TypeError("nnUNetTrainerMultiTask requires MultiTaskLabelManager.")
         self.task_names = self.label_manager.task_order
+        for task_name in self.task_names:
+            self.logger.local_logger.my_fantastic_logging.setdefault(f"mean_fg_dice__{task_name}", [])
         self.multitask_config = self.configuration_manager.multitask_config
+        self.multitask_dataset_config = self.dataset_json.get("multitask", {})
+        self.views = list(self.multitask_dataset_config.get("views", []))
+        self.is_paired_multiview = self.multitask_dataset_config.get("case_unit") == "paired_anterior_posterior"
         self._validate_task_config_matches_labels()
         self.task_loss_weights = {
             task.get("name", f"task{i + 1}"): float(task.get("loss_weight", 1.0))
@@ -56,6 +61,8 @@ class nnUNetTrainerMultiTask(nnUNetTrainer):
             )
 
     def _split_targets(self, target):
+        if self.is_paired_multiview:
+            return self._split_paired_multiview_targets(target)
         if isinstance(target, list):
             return {
                 task_name: [level[:, idx:idx + 1].contiguous() for level in target]
@@ -65,6 +72,74 @@ class nnUNetTrainerMultiTask(nnUNetTrainer):
             task_name: target[:, idx:idx + 1].contiguous()
             for idx, task_name in enumerate(self.task_names)
         }
+
+    def _split_paired_multiview_targets(self, target):
+        num_views = len(self.views)
+        if num_views < 1:
+            raise ValueError("Paired multitask datasets require dataset_json['multitask']['views'].")
+
+        def split_level(level):
+            expected_channels = len(self.task_names) * num_views
+            if level.shape[1] != expected_channels:
+                raise ValueError(
+                    f"Expected {expected_channels} target channels for {len(self.task_names)} tasks x "
+                    f"{num_views} views, got {level.shape[1]}."
+                )
+            return {
+                task_name: level[:, task_idx * num_views:(task_idx + 1) * num_views].contiguous()
+                for task_idx, task_name in enumerate(self.task_names)
+            }
+
+        if isinstance(target, list):
+            per_level = [split_level(level) for level in target]
+            return {
+                task_name: [level_targets[task_name] for level_targets in per_level]
+                for task_name in self.task_names
+            }
+        return split_level(target)
+
+    def _reshape_paired_multiview_for_loss(self, task_name: str, output, target):
+        if not self.is_paired_multiview:
+            return output, target
+
+        num_views = len(self.views)
+        num_classes = self.label_manager.get_task_label_manager(task_name).num_segmentation_heads
+
+        def reshape_level(out_level, tgt_level):
+            expected_channels = num_views * num_classes
+            if out_level.shape[1] != expected_channels:
+                raise ValueError(
+                    f"Task {task_name} expected {expected_channels} output channels "
+                    f"({num_views} views x {num_classes} classes), got {out_level.shape[1]}."
+                )
+            spatial_shape = out_level.shape[2:]
+            out_level = out_level.reshape(out_level.shape[0], num_views, num_classes, *spatial_shape)
+            out_level = out_level.reshape(out_level.shape[0] * num_views, num_classes, *spatial_shape)
+            tgt_level = tgt_level.reshape(tgt_level.shape[0] * num_views, 1, *tgt_level.shape[2:])
+            return out_level, tgt_level
+
+        if isinstance(output, list):
+            reshaped_outputs = []
+            reshaped_targets = []
+            for out_level, tgt_level in zip(output, target):
+                out_level, tgt_level = reshape_level(out_level, tgt_level)
+                reshaped_outputs.append(out_level)
+                reshaped_targets.append(tgt_level)
+            return reshaped_outputs, reshaped_targets
+        return reshape_level(output, target)
+
+    def _reshape_all_outputs_targets_for_loss(self, output, target):
+        if not self.is_paired_multiview:
+            return output, target
+        reshaped_outputs = {}
+        reshaped_targets = {}
+        for task_name in self.task_names:
+            reshaped_outputs[task_name], reshaped_targets[task_name] = self._reshape_paired_multiview_for_loss(
+                task_name,
+                output[task_name],
+                target[task_name],
+            )
+        return reshaped_outputs, reshaped_targets
 
     def _get_task_output_for_metrics(self, output: Dict[str, torch.Tensor], task_name: str):
         task_output = output[task_name]
@@ -158,7 +233,8 @@ class nnUNetTrainerMultiTask(nnUNetTrainer):
         self.optimizer.zero_grad(set_to_none=True)
         with autocast(self.device.type, enabled=True) if self.device.type == "cuda" else dummy_context():
             output = self.network(data)
-            loss = self.loss(output, target)
+            output_for_loss, target_for_loss = self._reshape_all_outputs_targets_for_loss(output, target)
+            loss = self.loss(output_for_loss, target_for_loss)
 
         if self.grad_scaler is not None:
             self.grad_scaler.scale(loss).backward()
@@ -183,12 +259,13 @@ class nnUNetTrainerMultiTask(nnUNetTrainer):
 
         with autocast(self.device.type, enabled=True) if self.device.type == "cuda" else dummy_context():
             output = self.network(data)
-            loss = self.loss(output, target)
+            output_for_loss, target_for_loss = self._reshape_all_outputs_targets_for_loss(output, target)
+            loss = self.loss(output_for_loss, target_for_loss)
 
         result = {"loss": loss.detach().cpu().numpy()}
         for task_name in self.task_names:
-            task_output = self._get_task_output_for_metrics(output, task_name)
-            task_target = self._get_task_target_for_metrics(target, task_name)
+            task_output = self._get_task_output_for_metrics(output_for_loss, task_name)
+            task_target = self._get_task_target_for_metrics(target_for_loss, task_name)
             task_label_manager = self.label_manager.get_task_label_manager(task_name)
             axes = [0] + list(range(2, task_output.ndim))
 

@@ -118,3 +118,9 @@ ENV/
 
 CLAUDE.md
 AGENTS.md
+
+# Local project context and run artifacts
+context/
+.claude/
+training_logs/
+evaluation_logs/

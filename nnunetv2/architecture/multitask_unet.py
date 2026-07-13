@@ -9,6 +9,7 @@ from torch import nn
 from torch.nn.modules.conv import _ConvNd
 from torch.nn.modules.dropout import _DropoutNd
 
+from nnunetv2.architecture.cbam import CBAMFeatureAdapter
 from nnunetv2.architecture.multitask_components import FeatureUNetDecoder, TaskSegmentationHead
 
 
@@ -34,6 +35,7 @@ class _BaseMultiTaskUNet(AbstractDynamicNetworkArchitectures):
         nonlin_kwargs: dict = None,
         deep_supervision: bool = False,
         nonlin_first: bool = False,
+        cbam: dict = None,
     ):
         super().__init__()
         self.key_to_encoder = "encoder.stages"
@@ -46,6 +48,7 @@ class _BaseMultiTaskUNet(AbstractDynamicNetworkArchitectures):
         self.multitask = multitask
         self.task_configs = self._normalize_tasks(multitask)
         self.task_names = [task["name"] for task in self.task_configs]
+        self.cbam = self._normalize_cbam(cbam)
 
         if isinstance(n_conv_per_stage, int):
             n_conv_per_stage = [n_conv_per_stage] * n_stages
@@ -70,6 +73,19 @@ class _BaseMultiTaskUNet(AbstractDynamicNetworkArchitectures):
             return_skips=True,
             nonlin_first=nonlin_first,
         )
+        encoder_cbam_channels = list(self.encoder.output_channels)
+        if not self.cbam["bottleneck"]:
+            encoder_cbam_channels = encoder_cbam_channels[:-1]
+        self.encoder_attention = (
+            CBAMFeatureAdapter(
+                self.encoder.conv_op,
+                encoder_cbam_channels,
+                self.cbam["reduction"],
+                self.cbam["spatial_kernel_size"],
+            )
+            if self.cbam["enabled"] and self.cbam["encoder"] and encoder_cbam_channels
+            else None
+        )
         self.n_conv_per_stage_decoder = n_conv_per_stage_decoder
         self.nonlin_first = nonlin_first
         self._decoder_kwargs = {
@@ -80,6 +96,7 @@ class _BaseMultiTaskUNet(AbstractDynamicNetworkArchitectures):
             "nonlin": nonlin,
             "nonlin_kwargs": nonlin_kwargs,
             "conv_bias": conv_bias,
+            "cbam": self.cbam,
         }
         self.num_classes = num_classes
         self._build_variant_modules()
@@ -87,18 +104,40 @@ class _BaseMultiTaskUNet(AbstractDynamicNetworkArchitectures):
     @staticmethod
     def _normalize_tasks(multitask: dict) -> List[dict]:
         tasks = multitask.get("tasks", []) if multitask is not None else []
-        if len(tasks) != 2:
-            raise ValueError("Multi-task v1 requires exactly two tasks.")
+        if len(tasks) < 1:
+            raise ValueError("Multitask architectures require at least one task.")
         normalized = []
         for idx, task in enumerate(tasks):
             normalized.append(
                 {
                     "name": task.get("name", f"task{idx + 1}"),
                     "num_classes": int(task["num_classes"]),
+                    "output_channels": int(task.get("output_channels", task["num_classes"])),
                     "loss_weight": float(task.get("loss_weight", 1.0)),
                 }
             )
         return normalized
+
+    @staticmethod
+    def _normalize_cbam(cbam: dict) -> dict:
+        cbam = cbam or {}
+        reduction = cbam.get("reduction", cbam.get("reduction_ratio", 16))
+        return {
+            "enabled": bool(cbam.get("enabled", False)),
+            "encoder": bool(cbam.get("encoder", True)),
+            "decoder": bool(cbam.get("decoder", True)),
+            "bottleneck": bool(cbam.get("bottleneck", True)),
+            "reduction": int(reduction),
+            "spatial_kernel_size": int(cbam.get("spatial_kernel_size", 7)),
+        }
+
+    def _apply_encoder_attention(self, skips: List[torch.Tensor]) -> List[torch.Tensor]:
+        if self.encoder_attention is None:
+            return skips
+        if self.cbam["bottleneck"]:
+            return self.encoder_attention(skips)
+        attended_skips = self.encoder_attention(skips[:-1])
+        return [*attended_skips, skips[-1]]
 
     def _make_decoder(self):
         return FeatureUNetDecoder(
@@ -129,6 +168,15 @@ class _BaseMultiTaskUNet(AbstractDynamicNetworkArchitectures):
     def compute_conv_feature_map_size(self, input_size):
         assert len(input_size) == convert_conv_op_to_dim(self.encoder.conv_op)
         output = self.encoder.compute_conv_feature_map_size(input_size)
+        encoder_spatial_sizes = []
+        encoder_current_size = list(input_size)
+        for stride in self.encoder.strides:
+            encoder_current_size = [i // j for i, j in zip(encoder_current_size, stride)]
+            encoder_spatial_sizes.append(encoder_current_size)
+        if self.encoder_attention is not None:
+            output += self.encoder_attention.compute_conv_feature_map_size(
+                encoder_spatial_sizes if self.cbam["bottleneck"] else encoder_spatial_sizes[:-1]
+            )
         spatial_sizes = []
         current_size = list(input_size)
         for stride in self.encoder.strides[:-1]:
@@ -150,14 +198,14 @@ class MultiTaskDualHeadUNet(_BaseMultiTaskUNet):
         self.decoder = self._make_decoder()
         feature_channels = self.decoder.output_channels
         self.heads = nn.ModuleDict(
-            {task["name"]: self._make_head(task["num_classes"], feature_channels) for task in self.task_configs}
+            {task["name"]: self._make_head(task["output_channels"], feature_channels) for task in self.task_configs}
         )
 
     def _iter_decoders(self):
         return [self.decoder]
 
     def forward(self, x):
-        skips = self.encoder(x)
+        skips = self._apply_encoder_attention(self.encoder(x))
         shared_features = self.decoder(skips)
         return self._apply_heads({task_name: shared_features for task_name in self.task_names})
 
@@ -167,13 +215,13 @@ class MultiTaskDualDecoderUNet(_BaseMultiTaskUNet):
         self.decoders = nn.ModuleDict({task["name"]: self._make_decoder() for task in self.task_configs})
         feature_channels = next(iter(self.decoders.values())).output_channels
         self.heads = nn.ModuleDict(
-            {task["name"]: self._make_head(task["num_classes"], feature_channels) for task in self.task_configs}
+            {task["name"]: self._make_head(task["output_channels"], feature_channels) for task in self.task_configs}
         )
 
     def _iter_decoders(self):
         return list(self.decoders.values())
 
     def forward(self, x):
-        skips = self.encoder(x)
+        skips = self._apply_encoder_attention(self.encoder(x))
         task_features = {task_name: decoder(skips) for task_name, decoder in self.decoders.items()}
         return self._apply_heads(task_features)

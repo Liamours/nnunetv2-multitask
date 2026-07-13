@@ -1,4 +1,6 @@
 import inspect
+import os
+import shutil
 from typing import List, Type, Optional, Tuple, Union
 
 from batchgenerators.utilities.file_and_folder_operations import join, maybe_mkdir_p, load_json
@@ -8,9 +10,11 @@ from nnunetv2.configuration import default_num_processes
 from nnunetv2.experiment_planning.dataset_fingerprint.fingerprint_extractor import DatasetFingerprintExtractor
 from nnunetv2.experiment_planning.experiment_planners.default_experiment_planner import ExperimentPlanner
 from nnunetv2.experiment_planning.verify_dataset_integrity import verify_dataset_integrity
+from nnunetv2.experiment_planning.verify_multitask_dataset_integrity import verify_paired_multitask_dataset_integrity
 from nnunetv2.paths import nnUNet_raw, nnUNet_preprocessed
 from nnunetv2.utilities.dataset_name_id_conversion import convert_id_to_dataset_name
 from nnunetv2.utilities.find_class_by_name import recursive_find_python_class
+from nnunetv2.utilities.multitask_dataset import is_paired_multiview_multitask_dataset
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
 from nnunetv2.utilities.utils import get_filenames_of_train_images_and_targets
 
@@ -28,7 +32,11 @@ def extract_fingerprint_dataset(dataset_id: int,
     print(dataset_name)
 
     if check_dataset_integrity:
-        verify_dataset_integrity(join(nnUNet_raw, dataset_name), num_processes)
+        dataset_json = load_json(join(nnUNet_raw, dataset_name, "dataset.json"))
+        if is_paired_multiview_multitask_dataset(dataset_json):
+            verify_paired_multitask_dataset_integrity(join(nnUNet_raw, dataset_name))
+        else:
+            verify_dataset_integrity(join(nnUNet_raw, dataset_name), num_processes)
 
     fpe = fingerprint_extractor_class(dataset_id, num_processes, verbose=verbose)
     if hasattr(fpe, 'show_progress_bar'):
@@ -149,15 +157,16 @@ def preprocess_dataset(dataset_id: int,
 
     # copy the gt to a folder in the nnUNet_preprocessed so that we can do validation even if the raw data is no
     # longer there (useful for compute cluster where only the preprocessed data is available)
-    from distutils.file_util import copy_file
     maybe_mkdir_p(join(nnUNet_preprocessed, dataset_name, 'gt_segmentations'))
     dataset_json = load_json(join(nnUNet_raw, dataset_name, 'dataset.json'))
+    if is_paired_multiview_multitask_dataset(dataset_json):
+        print("Skipping default gt_segmentations copy for paired multitask labels.")
+        return
     dataset = get_filenames_of_train_images_and_targets(join(nnUNet_raw, dataset_name), dataset_json)
-    # only copy files that are newer than the ones already present
     for k in dataset:
-        copy_file(dataset[k]['label'],
-                  join(nnUNet_preprocessed, dataset_name, 'gt_segmentations', k + dataset_json['file_ending']),
-                  update=True)
+        destination = join(nnUNet_preprocessed, dataset_name, 'gt_segmentations', k + dataset_json['file_ending'])
+        if not os.path.isfile(destination) or os.path.getmtime(dataset[k]['label']) > os.path.getmtime(destination):
+            shutil.copy2(dataset[k]['label'], destination)
 
 
 def preprocess(dataset_ids: List[int],

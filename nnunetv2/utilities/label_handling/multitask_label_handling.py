@@ -33,8 +33,8 @@ class MultiTaskLabelManager(object):
             )
             self.task_order.append(task_name)
 
-        if len(self.task_order) != 2:
-            raise ValueError("Multi-task v1 requires exactly two tasks in dataset_json['multitask']['tasks'].")
+        if len(self.task_order) < 1:
+            raise ValueError("Multitask datasets require at least one task in dataset_json['multitask']['tasks'].")
 
         self._has_regions = any(manager.has_regions for manager in self.task_label_managers.values())
         self._ignore_label = None

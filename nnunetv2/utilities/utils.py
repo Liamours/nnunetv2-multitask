@@ -20,6 +20,10 @@ import numpy as np
 from batchgenerators.utilities.file_and_folder_operations import *
 
 from nnunetv2.paths import nnUNet_raw
+from nnunetv2.utilities.multitask_dataset import (
+    get_paired_multitask_filenames,
+    is_paired_multiview_multitask_dataset,
+)
 
 
 def get_identifiers_from_splitted_dataset_folder(folder: str, file_ending: str):
@@ -57,6 +61,9 @@ def create_lists_from_splitted_dataset_folder(folder: str, file_ending: str, ide
 def get_filenames_of_train_images_and_targets(raw_dataset_folder: str, dataset_json: dict = None):
     if dataset_json is None:
         dataset_json = load_json(join(raw_dataset_folder, 'dataset.json'))
+
+    if is_paired_multiview_multitask_dataset(dataset_json):
+        return get_paired_multitask_filenames(raw_dataset_folder, dataset_json)
 
     if 'dataset' in dataset_json.keys():
         dataset = dataset_json['dataset']

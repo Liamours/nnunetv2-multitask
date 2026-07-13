@@ -25,6 +25,8 @@ from nnunetv2.inference.data_iterators import PreprocessAdapterFromNpy, preproce
     preprocessing_iterator_fromnpy
 from nnunetv2.inference.export_prediction import export_prediction_from_logits, \
     convert_predicted_logits_to_segmentation_with_correct_shape
+from nnunetv2.inference.export_prediction_multitask import export_prediction_from_logits_multitask, \
+    convert_predicted_logits_to_segmentation_with_correct_shape_multitask
 from nnunetv2.inference.sliding_window_prediction import compute_gaussian, \
     compute_steps_for_sliding_window
 from nnunetv2.utilities.file_path_utilities import get_output_folder, check_workers_alive_and_busy
@@ -35,6 +37,12 @@ from nnunetv2.utilities.label_handling.label_handling import determine_num_input
     convert_labelmap_to_one_hot
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager, ConfigurationManager
 from nnunetv2.utilities.utils import create_lists_from_splitted_dataset_folder
+
+
+def _move_prediction_to_cpu_numpy(prediction):
+    if isinstance(prediction, dict):
+        return {task_name: task_prediction.cpu().detach().numpy() for task_name, task_prediction in prediction.items()}
+    return prediction.cpu().detach().numpy()
 
 
 class nnUNetPredictor(object):
@@ -400,24 +408,30 @@ class nnUNetPredictor(object):
                     proceed = not check_workers_alive_and_busy(export_pool, worker_list, r, allowed_num_queued=2)
 
                 # convert to numpy to prevent uncatchable memory alignment errors from multiprocessing serialization of torch tensors
-                prediction = self.predict_logits_from_preprocessed_data(data).cpu().detach().numpy()
+                prediction = _move_prediction_to_cpu_numpy(self.predict_logits_from_preprocessed_data(data))
 
                 if ofile is not None:
                     print('sending off prediction to background worker for resampling and export')
+                    export_function = export_prediction_from_logits_multitask \
+                        if isinstance(prediction, dict) else export_prediction_from_logits
                     r.append(
                         export_pool.apply_async(
-                            export_prediction_from_logits,
+                            export_function,
                             (prediction, properties, self.configuration_manager, self.plans_manager,
                              self.dataset_json, ofile, save_probabilities)
                         )
                     )
                 else:
                     print('sending off prediction to background worker for resampling')
+                    convert_function = convert_predicted_logits_to_segmentation_with_correct_shape_multitask \
+                        if isinstance(prediction, dict) else convert_predicted_logits_to_segmentation_with_correct_shape
+                    label_manager = self.plans_manager.get_label_manager(self.dataset_json) \
+                        if isinstance(prediction, dict) else self.label_manager
                     r.append(
                         export_pool.apply_async(
-                            convert_predicted_logits_to_segmentation_with_correct_shape,
+                            convert_function,
                             (prediction, self.plans_manager,
-                             self.configuration_manager, self.label_manager,
+                             self.configuration_manager, label_manager,
                              properties,
                              save_probabilities)
                         )
@@ -490,16 +504,22 @@ class nnUNetPredictor(object):
         if self.verbose:
             print('resampling to original shape')
         if output_file_truncated is not None:
-            export_prediction_from_logits(predicted_logits, dct['data_properties'], self.configuration_manager,
-                                          self.plans_manager, self.dataset_json, output_file_truncated,
-                                          save_or_return_probabilities)
+            export_function = export_prediction_from_logits_multitask \
+                if isinstance(predicted_logits, dict) else export_prediction_from_logits
+            export_function(predicted_logits, dct['data_properties'], self.configuration_manager,
+                            self.plans_manager, self.dataset_json, output_file_truncated,
+                            save_or_return_probabilities)
         else:
-            ret = convert_predicted_logits_to_segmentation_with_correct_shape(predicted_logits, self.plans_manager,
-                                                                              self.configuration_manager,
-                                                                              self.label_manager,
-                                                                              dct['data_properties'],
-                                                                              return_probabilities=
-                                                                              save_or_return_probabilities)
+            convert_function = convert_predicted_logits_to_segmentation_with_correct_shape_multitask \
+                if isinstance(predicted_logits, dict) else convert_predicted_logits_to_segmentation_with_correct_shape
+            label_manager = self.plans_manager.get_label_manager(self.dataset_json) \
+                if isinstance(predicted_logits, dict) else self.label_manager
+            ret = convert_function(predicted_logits, self.plans_manager,
+                                   self.configuration_manager,
+                                   label_manager,
+                                   dct['data_properties'],
+                                   return_probabilities=
+                                   save_or_return_probabilities)
             if save_or_return_probabilities:
                 return ret[0], ret[1]
             else:
@@ -648,9 +668,20 @@ class nnUNetPredictor(object):
             if self.verbose:
                 print(f'preallocating results arrays on device {results_device}')
             if self.is_multitask:
+                multitask_config = getattr(self.configuration_manager, "multitask_config", {})
+                output_channels_by_task = {
+                    task.get("name", f"task{i + 1}"): int(task.get("output_channels", task["num_classes"]))
+                    for i, task in enumerate(multitask_config.get("tasks", []))
+                }
                 predicted_logits = {
                     task_name: torch.zeros(
-                        (self.label_manager.get_task_label_manager(task_name).num_segmentation_heads, *data.shape[1:]),
+                        (
+                            output_channels_by_task.get(
+                                task_name,
+                                self.label_manager.get_task_label_manager(task_name).num_segmentation_heads,
+                            ),
+                            *data.shape[1:],
+                        ),
                         dtype=torch.half,
                         device=results_device,
                     )
@@ -843,16 +874,26 @@ class nnUNetPredictor(object):
 
             print(f'perform_everything_on_device: {self.perform_everything_on_device}')
 
-            prediction = self.predict_logits_from_preprocessed_data(torch.from_numpy(data)).cpu()
+            prediction = self.predict_logits_from_preprocessed_data(torch.from_numpy(data))
+            if isinstance(prediction, dict):
+                prediction = {task_name: task_prediction.cpu() for task_name, task_prediction in prediction.items()}
+            else:
+                prediction = prediction.cpu()
 
             if of is not None:
-                export_prediction_from_logits(prediction, data_properties, self.configuration_manager, self.plans_manager,
-                  self.dataset_json, of, save_probabilities)
+                export_function = export_prediction_from_logits_multitask \
+                    if isinstance(prediction, dict) else export_prediction_from_logits
+                export_function(prediction, data_properties, self.configuration_manager, self.plans_manager,
+                                self.dataset_json, of, save_probabilities)
             else:
-                ret.append(convert_predicted_logits_to_segmentation_with_correct_shape(prediction, self.plans_manager,
-                     self.configuration_manager, self.label_manager,
-                     data_properties,
-                     save_probabilities))
+                convert_function = convert_predicted_logits_to_segmentation_with_correct_shape_multitask \
+                    if isinstance(prediction, dict) else convert_predicted_logits_to_segmentation_with_correct_shape
+                label_manager = self.plans_manager.get_label_manager(self.dataset_json) \
+                    if isinstance(prediction, dict) else self.label_manager
+                ret.append(convert_function(prediction, self.plans_manager,
+                                            self.configuration_manager, label_manager,
+                                            data_properties,
+                                            save_probabilities))
 
         # clear lru cache
         compute_gaussian.cache_clear()

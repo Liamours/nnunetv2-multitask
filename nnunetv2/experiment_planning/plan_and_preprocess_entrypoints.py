@@ -20,8 +20,8 @@ def _parse_multitask_tasks(task_specs):
         if len(parts) == 3:
             task["loss_weight"] = float(parts[2])
         tasks.append(task)
-    if len(tasks) != 2:
-        raise ValueError("Multi-task v1 requires exactly two --multitask_task entries.")
+    if len(tasks) < 1:
+        raise ValueError("Multitask planning requires at least one --multitask_task entry.")
     return tasks
 
 
@@ -31,6 +31,18 @@ def _add_multitask_planner_args(parser):
     parser.add_argument('--multitask_task', required=False, action='append',
                         help='[OPTIONAL] Multi-task spec formatted as name:num_classes[:loss_weight]. '
                              'Repeat exactly twice. Only supported by MultiTaskExperimentPlanner.')
+    parser.add_argument('--cbam', required=False, action='store_true',
+                        help='[OPTIONAL] Enable CBAM attention in custom multitask U-Net architectures.')
+    parser.add_argument('--cbam_no_encoder', required=False, action='store_true',
+                        help='[OPTIONAL] Disable CBAM on encoder skips while keeping other enabled CBAM locations.')
+    parser.add_argument('--cbam_no_decoder', required=False, action='store_true',
+                        help='[OPTIONAL] Disable CBAM on decoder stages while keeping other enabled CBAM locations.')
+    parser.add_argument('--cbam_no_bottleneck', required=False, action='store_true',
+                        help='[OPTIONAL] Disable CBAM on the bottleneck encoder feature.')
+    parser.add_argument('--cbam_reduction', required=False, type=int, default=16,
+                        help='[OPTIONAL] CBAM channel-attention reduction ratio. Default: 16.')
+    parser.add_argument('--cbam_spatial_kernel_size', required=False, type=int, default=7,
+                        help='[OPTIONAL] CBAM spatial-attention kernel size. Must be odd. Default: 7.')
 
 
 def _collect_multitask_planner_kwargs(args):
@@ -40,6 +52,19 @@ def _collect_multitask_planner_kwargs(args):
     multitask_tasks = _parse_multitask_tasks(args.multitask_task)
     if multitask_tasks is not None:
         planner_kwargs['multitask_tasks'] = multitask_tasks
+    if args.cbam:
+        if args.cbam_reduction < 1:
+            raise ValueError("--cbam_reduction must be >= 1.")
+        if args.cbam_spatial_kernel_size < 1 or args.cbam_spatial_kernel_size % 2 == 0:
+            raise ValueError("--cbam_spatial_kernel_size must be a positive odd integer.")
+        planner_kwargs['cbam'] = {
+            'enabled': True,
+            'encoder': not args.cbam_no_encoder,
+            'decoder': not args.cbam_no_decoder,
+            'bottleneck': not args.cbam_no_bottleneck,
+            'reduction': args.cbam_reduction,
+            'spatial_kernel_size': args.cbam_spatial_kernel_size,
+        }
     return planner_kwargs or None
 
 

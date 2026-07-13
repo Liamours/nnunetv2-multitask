@@ -14,8 +14,8 @@ def validate_multitask_config(multitask: dict):
     if variant not in {"dual_head", "dual_decoder"}:
         raise ValueError(f"Unsupported multitask variant: {variant}")
     tasks = multitask.get("tasks", [])
-    if len(tasks) != 2:
-        raise ValueError("Multi-task v1 requires exactly two tasks.")
+    if len(tasks) < 1:
+        raise ValueError("Multitask plans require at least one task.")
     for idx, task in enumerate(tasks):
         if "num_classes" not in task:
             raise ValueError(f"Task at index {idx} is missing num_classes.")
