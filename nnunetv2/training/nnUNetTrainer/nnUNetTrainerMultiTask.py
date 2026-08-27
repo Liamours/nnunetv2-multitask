@@ -14,6 +14,9 @@ from nnunetv2.paths import nnUNet_preprocessed
 from nnunetv2.training.loss.compound_losses import DC_and_BCE_loss, DC_and_CE_loss
 from nnunetv2.training.loss.dice import MemoryEfficientSoftDiceLoss, get_tp_fp_fn_tn
 from nnunetv2.training.loss.multitask_losses import MultiTaskLoss
+from nnunetv2.training.data_augmentation.custom_transforms.multitask_region_transform import (
+    ConvertMultiTaskSegmentationToRegionsTransform,
+)
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 from nnunetv2.utilities.collate_outputs import collate_outputs
 from nnunetv2.utilities.helpers import dummy_context
@@ -33,6 +36,12 @@ class nnUNetTrainerMultiTask(nnUNetTrainer):
         self.views = list(self.multitask_dataset_config.get("views", []))
         self.is_paired_multiview = self.multitask_dataset_config.get("case_unit") == "paired_anterior_posterior"
         self._validate_task_config_matches_labels()
+        self.task_raw_channel_slices = self._compute_task_raw_channel_slices()
+        # when self.label_manager.has_regions, ConvertMultiTaskSegmentationToRegionsTransform runs
+        # in the dataloader and re-shapes the target from raw channels to num_segmentation_heads
+        # channels per task, in the same task_order - _split_targets must slice by whichever shape
+        # actually reached it.
+        self.task_output_channel_slices = self._compute_task_output_channel_slices()
         self.task_loss_weights = {
             task.get("name", f"task{i + 1}"): float(task.get("loss_weight", 1.0))
             for i, task in enumerate(self.multitask_config["tasks"])
@@ -60,17 +69,52 @@ class nnUNetTrainerMultiTask(nnUNetTrainer):
                 f"Mismatches: {mismatched_heads}."
             )
 
+    def _compute_task_raw_channel_slices(self) -> Dict[str, slice]:
+        """Non-paired raw target tensor is task channels concatenated in task_order; each task
+        occupies task_num_raw_channels() consecutive channels (1 for standard tasks, N for
+        multichannel tasks whose raw storage already is N independent per-class channels)."""
+        raw_channels = self.label_manager.task_num_raw_channels()
+        slices = {}
+        offset = 0
+        for task_name in self.task_names:
+            n = raw_channels[task_name]
+            slices[task_name] = slice(offset, offset + n)
+            offset += n
+        return slices
+
+    def _compute_task_output_channel_slices(self) -> Dict[str, slice]:
+        """Channel layout after ConvertMultiTaskSegmentationToRegionsTransform has run: a task with
+        has_regions (multichannel, or genuinely region-derived) occupies num_segmentation_heads
+        channels; a plain CE task is left at 1 channel (its raw integer class map, unchanged - CE
+        consumes that directly, never one-hot). Task order is preserved."""
+        heads = self.label_manager.task_num_segmentation_heads()
+        slices = {}
+        offset = 0
+        for task_name in self.task_names:
+            has_regions = self.label_manager.get_task_label_manager(task_name).has_regions
+            n = heads[task_name] if has_regions else 1
+            slices[task_name] = slice(offset, offset + n)
+            offset += n
+        return slices
+
+    def _target_channel_slices(self) -> Dict[str, slice]:
+        # has_regions => the custom region transform already ran in the dataloader and reshaped the
+        # target to num_segmentation_heads channels per task; otherwise the target is still raw
+        # (e.g. BS-80K, where no task is multichannel and has_regions is False - untouched behaviour).
+        return self.task_output_channel_slices if self.label_manager.has_regions else self.task_raw_channel_slices
+
     def _split_targets(self, target):
         if self.is_paired_multiview:
             return self._split_paired_multiview_targets(target)
+        slices = self._target_channel_slices()
         if isinstance(target, list):
             return {
-                task_name: [level[:, idx:idx + 1].contiguous() for level in target]
-                for idx, task_name in enumerate(self.task_names)
+                task_name: [level[:, slices[task_name]].contiguous() for level in target]
+                for task_name in self.task_names
             }
         return {
-            task_name: target[:, idx:idx + 1].contiguous()
-            for idx, task_name in enumerate(self.task_names)
+            task_name: target[:, slices[task_name]].contiguous()
+            for task_name in self.task_names
         }
 
     def _split_paired_multiview_targets(self, target):
@@ -199,15 +243,67 @@ class nnUNetTrainerMultiTask(nnUNetTrainer):
 
         deep_supervision_weights = None
         if self.enable_deep_supervision:
-            deep_supervision_scales = self._get_deep_supervision_scales()
-            weights = np.array([1 / (2 ** i) for i in range(len(deep_supervision_scales))], dtype=np.float64)
-            if self.is_ddp and not self._do_i_compile():
-                weights[-1] = 1e-6
+            # Levels come from the instantiated network, not from the pooling geometry alone: the
+            # partial-decoder fission variants (MultiTaskEarlyMidUNet/MultiTaskMidUNet) emit fewer
+            # deep-supervision outputs than the full pooling depth, and a weight list normalized
+            # against the wrong count silently under-weights the loss instead of erroring. Falls back
+            # to the old pooling-derived count when the network isn't built yet (e.g. a trainer used
+            # only to exercise loss selection, never assigned a `.network`).
+            mod = self.network.module if self.is_ddp else self.network
+            if isinstance(mod, OptimizedModule):
+                mod = mod._orig_mod
+            if mod is not None and hasattr(mod, "deep_supervision_num_levels"):
+                num_levels = mod.deep_supervision_num_levels()
             else:
-                weights[-1] = 0
+                num_levels = len(self._get_deep_supervision_scales())
+            weights = np.array([1 / (2 ** i) for i in range(num_levels)], dtype=np.float64)
+            # A single level (Mid Fission's tail is one decoder stage) has nothing coarser to
+            # de-emphasize - zeroing "the last" weight would zero the only one and divide 0/0 below.
+            if num_levels > 1:
+                if self.is_ddp and not self._do_i_compile():
+                    weights[-1] = 1e-6
+                else:
+                    weights[-1] = 0
             deep_supervision_weights = (weights / weights.sum()).tolist()
 
         return MultiTaskLoss(task_losses, self.task_loss_weights, deep_supervision_weights)
+
+    def _task_regions_for_transform(self) -> Dict[str, List]:
+        """regions_class_order per task that has_regions but is NOT multichannel (i.e. a genuinely
+        derived-region task, one raw channel expanded into several via label tuples). Not used by any
+        current dataset - kept so the mechanism stays structurally correct if one is ever added."""
+        result = {}
+        for task_name in self.task_names:
+            manager = self.label_manager.get_task_label_manager(task_name)
+            if manager.has_regions and not self.label_manager.is_multichannel_task(task_name):
+                result[task_name] = manager.all_regions
+        return result
+
+    def get_training_transforms(self, *args, **kwargs):
+        # never let the stock single-channel-0 region transform run for multi-task data - build our
+        # own per-task version instead (see ConvertMultiTaskSegmentationToRegionsTransform docstring).
+        kwargs["regions"] = None
+        composed = nnUNetTrainer.get_training_transforms(*args, **kwargs)
+        if self.label_manager.has_regions:
+            composed.transforms.append(ConvertMultiTaskSegmentationToRegionsTransform(
+                task_order=self.task_names,
+                task_raw_channel_slices=self.task_raw_channel_slices,
+                task_is_multichannel={t: self.label_manager.is_multichannel_task(t) for t in self.task_names},
+                task_regions=self._task_regions_for_transform(),
+            ))
+        return composed
+
+    def get_validation_transforms(self, *args, **kwargs):
+        kwargs["regions"] = None
+        composed = nnUNetTrainer.get_validation_transforms(*args, **kwargs)
+        if self.label_manager.has_regions:
+            composed.transforms.append(ConvertMultiTaskSegmentationToRegionsTransform(
+                task_order=self.task_names,
+                task_raw_channel_slices=self.task_raw_channel_slices,
+                task_is_multichannel={t: self.label_manager.is_multichannel_task(t) for t in self.task_names},
+                task_regions=self._task_regions_for_transform(),
+            ))
+        return composed
 
     def set_deep_supervision_enabled(self, enabled: bool):
         if self.is_ddp:

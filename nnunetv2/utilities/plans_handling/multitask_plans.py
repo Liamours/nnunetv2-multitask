@@ -11,7 +11,7 @@ def get_multitask_config(configuration_manager) -> dict:
 
 def validate_multitask_config(multitask: dict):
     variant = multitask.get("variant")
-    if variant not in {"dual_head", "dual_decoder"}:
+    if variant not in {"dual_head", "dual_decoder", "early_mid_fission", "mid_fission"}:
         raise ValueError(f"Unsupported multitask variant: {variant}")
     tasks = multitask.get("tasks", [])
     if len(tasks) < 1:

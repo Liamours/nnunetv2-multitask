@@ -6,7 +6,17 @@ import numpy as np
 from dynamic_network_architectures.building_blocks.helper import convert_dim_to_conv_op
 from nnunetv2.experiment_planning.experiment_planners.default_experiment_planner import ExperimentPlanner
 from nnunetv2.experiment_planning.experiment_planners.network_topology import get_pool_and_conv_props
-from nnunetv2.utilities.multitask_dataset import is_paired_multiview_multitask_dataset
+from nnunetv2.utilities.multitask_dataset import is_multitask_dataset, is_paired_multiview_multitask_dataset
+
+# Hickson, Raveendran & Essa (2022) decoder fission points, extremes first. "dual_head"/"dual_decoder"
+# are this project's pre-renaming names, kept as-is since they're already baked into saved plans.json
+# files; the two new intermediate points use the paper's own naming.
+_MULTITASK_VARIANT_TO_CLASS = {
+    "dual_head": "nnunetv2.architecture.multitask_unet.MultiTaskDualHeadUNet",
+    "dual_decoder": "nnunetv2.architecture.multitask_unet.MultiTaskDualDecoderUNet",
+    "early_mid_fission": "nnunetv2.architecture.multitask_unet.MultiTaskEarlyMidUNet",
+    "mid_fission": "nnunetv2.architecture.multitask_unet.MultiTaskMidUNet",
+}
 
 
 class MultiTaskExperimentPlanner(ExperimentPlanner):
@@ -35,7 +45,7 @@ class MultiTaskExperimentPlanner(ExperimentPlanner):
         self.UNet_min_batch_size = 1
         self.multitask_variant = multitask_variant
         self.cbam = cbam or {"enabled": False}
-        if is_paired_multiview_multitask_dataset(self.dataset_json) and self.preprocessor_name == "DefaultPreprocessor":
+        if is_multitask_dataset(self.dataset_json) and self.preprocessor_name == "DefaultPreprocessor":
             self.preprocessor_name = "MultiTaskPreprocessor"
         self.multitask_tasks = multitask_tasks or [
             {"name": "task1", "num_classes": 2, "loss_weight": 1.0},
@@ -45,11 +55,13 @@ class MultiTaskExperimentPlanner(ExperimentPlanner):
 
     def _make_multitask_architecture(self, architecture_kwargs: dict) -> dict:
         architecture_kwargs = deepcopy(architecture_kwargs)
-        architecture_kwargs["network_class_name"] = (
-            "nnunetv2.architecture.multitask_unet.MultiTaskDualHeadUNet"
-            if self.multitask_variant == "dual_head"
-            else "nnunetv2.architecture.multitask_unet.MultiTaskDualDecoderUNet"
-        )
+        try:
+            architecture_kwargs["network_class_name"] = _MULTITASK_VARIANT_TO_CLASS[self.multitask_variant]
+        except KeyError:
+            raise ValueError(
+                f"Unknown multitask_variant {self.multitask_variant!r}. "
+                f"Known: {sorted(_MULTITASK_VARIANT_TO_CLASS)}."
+            ) from None
         architecture_kwargs["arch_kwargs"]["multitask"] = {
             "variant": self.multitask_variant,
             "tasks": deepcopy(self._tasks_with_output_channels()),

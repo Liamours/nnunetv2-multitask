@@ -139,12 +139,13 @@ class _BaseMultiTaskUNet(AbstractDynamicNetworkArchitectures):
         attended_skips = self.encoder_attention(skips[:-1])
         return [*attended_skips, skips[-1]]
 
-    def _make_decoder(self):
+    def _make_decoder(self, stage_range: Tuple[int, int] = None):
         return FeatureUNetDecoder(
             self.encoder,
             self.n_conv_per_stage_decoder,
             self.deep_supervision,
             nonlin_first=self.nonlin_first,
+            stage_range=stage_range,
             **self._decoder_kwargs,
         )
 
@@ -157,6 +158,9 @@ class _BaseMultiTaskUNet(AbstractDynamicNetworkArchitectures):
             decoder.deep_supervision = enabled
 
     def _iter_decoders(self):
+        raise NotImplementedError
+
+    def deep_supervision_num_levels(self) -> int:
         raise NotImplementedError
 
     def _apply_heads(self, task_features: Dict[str, Union[torch.Tensor, List[torch.Tensor]]]):
@@ -194,6 +198,9 @@ class _BaseMultiTaskUNet(AbstractDynamicNetworkArchitectures):
 
 
 class MultiTaskDualHeadUNet(_BaseMultiTaskUNet):
+    """Hickson et al. 2022, Fig. 1d, Late Fission: the whole decoder is shared, only the final
+    per-task output head splits."""
+
     def _build_variant_modules(self):
         self.decoder = self._make_decoder()
         feature_channels = self.decoder.output_channels
@@ -204,6 +211,9 @@ class MultiTaskDualHeadUNet(_BaseMultiTaskUNet):
     def _iter_decoders(self):
         return [self.decoder]
 
+    def deep_supervision_num_levels(self) -> int:
+        return len(self.n_conv_per_stage_decoder)
+
     def forward(self, x):
         skips = self._apply_encoder_attention(self.encoder(x))
         shared_features = self.decoder(skips)
@@ -211,6 +221,9 @@ class MultiTaskDualHeadUNet(_BaseMultiTaskUNet):
 
 
 class MultiTaskDualDecoderUNet(_BaseMultiTaskUNet):
+    """Hickson et al. 2022, Fig. 1a, Early Fission: every decoder stage is task-specific from
+    right after the shared encoder."""
+
     def _build_variant_modules(self):
         self.decoders = nn.ModuleDict({task["name"]: self._make_decoder() for task in self.task_configs})
         feature_channels = next(iter(self.decoders.values())).output_channels
@@ -221,7 +234,68 @@ class MultiTaskDualDecoderUNet(_BaseMultiTaskUNet):
     def _iter_decoders(self):
         return list(self.decoders.values())
 
+    def deep_supervision_num_levels(self) -> int:
+        return len(self.n_conv_per_stage_decoder)
+
     def forward(self, x):
         skips = self._apply_encoder_attention(self.encoder(x))
         task_features = {task_name: decoder(skips) for task_name, decoder in self.decoders.items()}
         return self._apply_heads(task_features)
+
+
+class _PartialSharedDecoderMultiTaskUNet(_BaseMultiTaskUNet):
+    """Shared base for the two intermediate fission points: one shared decoder "trunk" run once on
+    the encoder skips, then one independent per-task decoder "tail" continuing from the trunk's
+    output. Concrete subclasses only need to say how many stages the trunk covers.
+    """
+
+    def _trunk_stage_count(self) -> int:
+        raise NotImplementedError
+
+    def _build_variant_modules(self):
+        n_stages = len(self.n_conv_per_stage_decoder)
+        trunk_stages = self._trunk_stage_count()
+        if not 0 < trunk_stages < n_stages:
+            raise ValueError(
+                f"{type(self).__name__} needs 0 < trunk stages < {n_stages} decoder stages, "
+                f"got {trunk_stages}."
+            )
+        self.trunk = self._make_decoder(stage_range=(0, trunk_stages))
+        self.tails = nn.ModuleDict(
+            {task["name"]: self._make_decoder(stage_range=(trunk_stages, n_stages)) for task in self.task_configs}
+        )
+        feature_channels = next(iter(self.tails.values())).output_channels
+        self.heads = nn.ModuleDict(
+            {task["name"]: self._make_head(task["output_channels"], feature_channels) for task in self.task_configs}
+        )
+
+    def _iter_decoders(self):
+        return [self.trunk, *self.tails.values()]
+
+    def deep_supervision_num_levels(self) -> int:
+        tail = next(iter(self.tails.values()))
+        return tail.stage_range[1] - tail.stage_range[0]
+
+    def forward(self, x):
+        skips = self._apply_encoder_attention(self.encoder(x))
+        trunk_out = self.trunk(skips)
+        if isinstance(trunk_out, list):
+            trunk_out = trunk_out[0]
+        task_features = {task_name: tail(skips, initial_input=trunk_out) for task_name, tail in self.tails.items()}
+        return self._apply_heads(task_features)
+
+
+class MultiTaskEarlyMidUNet(_PartialSharedDecoderMultiTaskUNet):
+    """Hickson et al. 2022, Fig. 1b, Early-Mid Fission: encoder plus the first (coarsest) decoder
+    stage shared, the rest split per task."""
+
+    def _trunk_stage_count(self) -> int:
+        return 1
+
+
+class MultiTaskMidUNet(_PartialSharedDecoderMultiTaskUNet):
+    """Hickson et al. 2022, Fig. 1c, Mid Fission: encoder and every decoder stage except the last
+    (finest) one shared. The paper's proposed / headline configuration."""
+
+    def _trunk_stage_count(self) -> int:
+        return len(self.n_conv_per_stage_decoder) - 1

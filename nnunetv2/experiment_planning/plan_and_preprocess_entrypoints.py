@@ -26,7 +26,8 @@ def _parse_multitask_tasks(task_specs):
 
 
 def _add_multitask_planner_args(parser):
-    parser.add_argument('--multitask_variant', required=False, choices=['dual_head', 'dual_decoder'],
+    parser.add_argument('--multitask_variant', required=False,
+                        choices=['dual_head', 'dual_decoder', 'early_mid_fission', 'mid_fission'],
                         help='[OPTIONAL] Multi-task architecture variant. Only supported by MultiTaskExperimentPlanner.')
     parser.add_argument('--multitask_task', required=False, action='append',
                         help='[OPTIONAL] Multi-task spec formatted as name:num_classes[:loss_weight]. '

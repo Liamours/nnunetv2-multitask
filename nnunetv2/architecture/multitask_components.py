@@ -27,6 +27,7 @@ class FeatureUNetDecoder(nn.Module):
         nonlin_kwargs: dict = None,
         conv_bias: bool = None,
         cbam: dict = None,
+        stage_range: Tuple[int, int] = None,
     ):
         super().__init__()
         self.deep_supervision = deep_supervision
@@ -35,6 +36,9 @@ class FeatureUNetDecoder(nn.Module):
         if isinstance(n_conv_per_stage, int):
             n_conv_per_stage = [n_conv_per_stage] * (n_stages_encoder - 1)
         assert len(n_conv_per_stage) == n_stages_encoder - 1
+
+        self.stage_range = stage_range if stage_range is not None else (0, n_stages_encoder - 1)
+        assert 0 <= self.stage_range[0] < self.stage_range[1] <= n_stages_encoder - 1
 
         transpconv_op = get_matching_convtransp(conv_op=encoder.conv_op)
         conv_bias = encoder.conv_bias if conv_bias is None else conv_bias
@@ -53,7 +57,7 @@ class FeatureUNetDecoder(nn.Module):
         use_cbam = bool(cbam.get("enabled", False)) and bool(cbam.get("decoder", True))
         cbam_reduction = int(cbam.get("reduction", cbam.get("reduction_ratio", 16)))
         cbam_spatial_kernel_size = int(cbam.get("spatial_kernel_size", 7))
-        for s in range(1, n_stages_encoder):
+        for s in range(self.stage_range[0] + 1, self.stage_range[1] + 1):
             input_features_below = encoder.output_channels[-s]
             input_features_skip = encoder.output_channels[-(s + 1)]
             stride_for_transpconv = encoder.strides[-s]
@@ -96,12 +100,13 @@ class FeatureUNetDecoder(nn.Module):
         self.attention_blocks = nn.ModuleList(attention_blocks)
         self.output_channels = output_channels[::-1]
 
-    def forward(self, skips):
-        lres_input = skips[-1]
+    def forward(self, skips, initial_input=None):
+        lres_input = initial_input if initial_input is not None else skips[-1]
+        offset = self.stage_range[0]
         decoder_features = []
         for s in range(len(self.stages)):
             x = self.transpconvs[s](lres_input)
-            x = torch.cat((x, skips[-(s + 2)]), 1)
+            x = torch.cat((x, skips[-(s + 2 + offset)]), 1)
             x = self.stages[s](x)
             x = self.attention_blocks[s](x)
             decoder_features.append(x)
@@ -117,12 +122,15 @@ class FeatureUNetDecoder(nn.Module):
             skip_sizes.append([i // j for i, j in zip(input_size, self.encoder.strides[s])])
             input_size = skip_sizes[-1]
 
+        offset = self.stage_range[0]
         output = np.int64(0)
         for s in range(len(self.stages)):
-            output += self.stages[s].compute_conv_feature_map_size(skip_sizes[-(s + 1)])
+            output += self.stages[s].compute_conv_feature_map_size(skip_sizes[-(s + 1 + offset)])
             if hasattr(self.attention_blocks[s], "compute_conv_feature_map_size"):
-                output += self.attention_blocks[s].compute_conv_feature_map_size(skip_sizes[-(s + 1)])
-            output += np.prod([self.encoder.output_channels[-(s + 2)], *skip_sizes[-(s + 1)]], dtype=np.int64)
+                output += self.attention_blocks[s].compute_conv_feature_map_size(skip_sizes[-(s + 1 + offset)])
+            output += np.prod(
+                [self.encoder.output_channels[-(s + 2 + offset)], *skip_sizes[-(s + 1 + offset)]], dtype=np.int64
+            )
         return output
 
 
