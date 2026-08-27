@@ -1,8 +1,5 @@
 param(
-    [string]$Device = "cuda",
-    [string]$PlanName = "nnUNetPlansMultiTask2GB",
-    [string]$EvaluationName = "a2_dual_head_100epoch_best_latest",
-    [string]$RunPrefix = "A2_dual_head"
+    [string]$Device = "cuda"
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,11 +9,11 @@ while (-not (Test-Path (Join-Path $__d 'dataset_paths.ps1'))) { $__d = Split-Pat
 . (Join-Path $__d 'dataset_paths.ps1')
 
 $Repo = Join-Path $Workspace "repo\nnunetv2_multitask"
-$RawDataset = Join-Path $NNUNetRaw "Dataset260_BS80KLesionBoneMT"
-$Images = Join-Path $RawDataset "imagesTr"
-$EvalRoot = Join-Path $Workspace ("analyses\evaluations\" + $EvaluationName)
+$RawMT = Join-Path $NNUNetRaw "Dataset260_BS80KLesionBoneMT"
+$ImageAll = Join-Path $RawMT "imagesTr"
+$EvalRoot = Join-Path $Workspace "analyses\evaluations\available_now"
 $InputRoot = Join-Path $EvalRoot "inputs"
-$SummaryFile = Join-Path $EvalRoot "summary.csv"
+$SummaryFile = Join-Path $EvalRoot "available_now_summary.csv"
 
 Set-Location -LiteralPath $Repo
 $env:nnUNet_raw = $NNUNetRaw
@@ -29,26 +26,44 @@ $env:MKL_NUM_THREADS = "1"
 
 New-Item -ItemType Directory -Force -Path $EvalRoot | Out-Null
 
-$splitRows = Import-Csv (Join-Path $RawDataset "split_seed42.csv")
+$splitRows = Import-Csv (Join-Path $RawMT "split_seed42.csv")
 foreach ($split in @("val", "test")) {
     $splitInput = Join-Path $InputRoot $split
-    if (Test-Path -LiteralPath $splitInput) {
-        Remove-Item -LiteralPath $splitInput -Recurse -Force
-    }
     New-Item -ItemType Directory -Force -Path $splitInput | Out-Null
     $cases = $splitRows | Where-Object { $_.split -eq $split }
     foreach ($case in $cases) {
         foreach ($channel in @("0000", "0001")) {
-            $src = Join-Path $Images "$($case.case_id)_$channel.png"
+            $src = Join-Path $ImageAll "$($case.case_id)_$channel.png"
             $dst = Join-Path $splitInput "$($case.case_id)_$channel.png"
-            New-Item -ItemType HardLink -Path $dst -Target $src | Out-Null
+            if (-not (Test-Path -LiteralPath $dst)) {
+                New-Item -ItemType HardLink -Path $dst -Target $src | Out-Null
+            }
         }
     }
 }
 
 $runs = @(
-    @{ Id = "$RunPrefix`_best"; Checkpoint = "checkpoint_best.pth" },
-    @{ Id = "$RunPrefix`_latest"; Checkpoint = "checkpoint_final.pth" }
+    @{
+        Id = "A2_dual_head_best"
+        Dataset = "260"
+        Trainer = "nnUNetTrainerMultiTask_100epochs"
+        Plans = "nnUNetPlansMultiTask2GB"
+        Checkpoint = "checkpoint_best.pth"
+    },
+    @{
+        Id = "A2_dual_head_latest"
+        Dataset = "260"
+        Trainer = "nnUNetTrainerMultiTask_100epochs"
+        Plans = "nnUNetPlansMultiTask2GB"
+        Checkpoint = "checkpoint_latest.pth"
+    },
+    @{
+        Id = "A3_dual_decoder_best"
+        Dataset = "260"
+        Trainer = "nnUNetTrainerMultiTask_100epochs"
+        Plans = "nnUNetPlansMultiTaskDualDecoder"
+        Checkpoint = "checkpoint_best.pth"
+    }
 )
 
 $summary = @()
@@ -57,28 +72,26 @@ foreach ($run in $runs) {
         $inputDir = Join-Path $InputRoot $split
         $predDir = Join-Path $EvalRoot "$($run.Id)\$split\predictions"
         $metricFile = Join-Path $EvalRoot "$($run.Id)\$split\metrics.json"
-        if (Test-Path -LiteralPath $predDir) {
-            Remove-Item -LiteralPath $predDir -Recurse -Force
-        }
         New-Item -ItemType Directory -Force -Path $predDir | Out-Null
 
         uv run nnUNetv2_predict `
             -i $inputDir `
             -o $predDir `
-            -d 260 `
+            -d $run.Dataset `
             -c 2d `
-            -tr nnUNetTrainerMultiTask_100epochs `
-            -p $PlanName `
+            -tr $run.Trainer `
+            -p $run.Plans `
             -f 0 `
             -chk $run.Checkpoint `
             -device $Device `
             -npp 1 `
             -nps 1 `
             --disable_tta `
+            --continue_prediction `
             --disable_progress_bar
 
         uv run nnUNetv2_evaluate_multitask `
-            --raw_dataset $RawDataset `
+            --raw_dataset $RawMT `
             --predictions $predDir `
             --split $split `
             --output $metricFile
@@ -91,8 +104,6 @@ foreach ($run in $runs) {
             split = $split
             checkpoint = $run.Checkpoint
             lesion_dice = $lesion.pixel_mean.dice
-            lesion_benign_dice = $lesion.by_label.benign.dice
-            lesion_malignant_dice = $lesion.by_label.malignant.dice
             lesion_sensitivity = $lesion.pixel_mean.sensitivity
             lesion_specificity = $lesion.pixel_mean.specificity
             lesionwise_f1 = $lesion.lesionwise_class_matched.lesionwise_f1

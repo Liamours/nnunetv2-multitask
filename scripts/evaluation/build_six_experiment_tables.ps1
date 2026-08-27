@@ -1,7 +1,10 @@
 $ErrorActionPreference = "Stop"
 
-$dataRoot = "C:\Users\lulay\Desktop\nnunetv2-multitask\data"
-$evaluationRoot = Join-Path $dataRoot "evaluation"
+$__d = $PSScriptRoot
+while (-not (Test-Path (Join-Path $__d 'dataset_paths.ps1'))) { $__d = Split-Path $__d -Parent }
+. (Join-Path $__d 'dataset_paths.ps1')
+
+$evaluationRoot = Join-Path $Workspace "analyses\evaluations"
 $runs = @(
     @{ Model = "A1 lesion-only"; Summary = "a1_lesion_only_100epoch_best_latest"; Id = "A1_lesion_only_best" },
     @{ Model = "A1 lesion-only + CBAM"; Summary = "a1_lesion_only_cbam_100epoch_best_latest"; Id = "A1_lesion_only_cbam_best" },

@@ -7,18 +7,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = "C:\Users\lulay\Desktop\nnunetv2-multitask\repo\nnunetv2-multitask"
-$dataRoot = "C:\Users\lulay\Desktop\nnunetv2-multitask\data"
-$rawDataset = Join-Path $dataRoot "nnUNet_raw\Dataset261_BS80KLesionOnly"
+$__d = $PSScriptRoot
+while (-not (Test-Path (Join-Path $__d 'dataset_paths.ps1'))) { $__d = Split-Path $__d -Parent }
+. (Join-Path $__d 'dataset_paths.ps1')
+
+$repoRoot = Join-Path $Workspace "repo\nnunetv2_multitask"
+$rawDataset = Join-Path $NNUNetRaw "Dataset261_BS80KLesionOnly"
 $images = Join-Path $rawDataset "imagesTr"
-$evalRoot = Join-Path $dataRoot ("evaluation\" + $EvaluationName)
+$evalRoot = Join-Path $Workspace ("analyses\evaluations\" + $EvaluationName)
 $inputRoot = Join-Path $evalRoot "inputs"
 $summaryFile = Join-Path $evalRoot "summary.csv"
 
 Set-Location -LiteralPath $repoRoot
-$env:nnUNet_raw = Join-Path $dataRoot "nnUNet_raw"
-$env:nnUNet_preprocessed = Join-Path $dataRoot "nnUNet_preprocessed"
-$env:nnUNet_results = Join-Path $dataRoot "nnUNet_results"
+$env:nnUNet_raw = $NNUNetRaw
+$env:nnUNet_preprocessed = $NNUNetPreprocessed
+$env:nnUNet_results = $NNUNetResults
 $env:nnUNet_n_proc_DA = "1"
 $env:nnUNet_def_n_proc = "1"
 $env:OMP_NUM_THREADS = "1"

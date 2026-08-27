@@ -1,13 +1,16 @@
 $ErrorActionPreference = "Stop"
 
-$repoRoot = "C:\Users\lulay\Desktop\nnunetv2-multitask\repo\nnunetv2-multitask"
-$dataRoot = "C:\Users\lulay\Desktop\nnunetv2-multitask\data"
+$__d = $PSScriptRoot
+while (-not (Test-Path (Join-Path $__d 'dataset_paths.ps1'))) { $__d = Split-Path $__d -Parent }
+. (Join-Path $__d 'dataset_paths.ps1')
+
+$repoRoot = Join-Path $Workspace "repo\nnunetv2_multitask"
 
 while (Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "evaluate_a2_a3_cbam_sequential" }) {
     Start-Sleep -Seconds 30
 }
 
-$a3Summary = Join-Path $dataRoot "evaluation\a3_dual_decoder_cbam_100epoch_best_latest\summary.csv"
+$a3Summary = Join-Path $Workspace "analyses\evaluations\a3_dual_decoder_cbam_100epoch_best_latest\summary.csv"
 if (-not (Test-Path -LiteralPath $a3Summary)) {
     throw "A3 + CBAM evaluation did not produce its summary; A1 evaluation was not started."
 }
