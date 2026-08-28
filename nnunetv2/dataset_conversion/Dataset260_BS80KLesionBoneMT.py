@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import bz2
 import csv
+import io
 import re
 import shutil
+import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Set, Tuple
 
@@ -15,10 +18,16 @@ from PIL import Image
 from nnunetv2.experiment_planning.verify_multitask_dataset_integrity import verify_paired_multitask_dataset_integrity
 from nnunetv2.paths import nnUNet_raw
 
+# dataset_compressed_io.py sits at repo/ root, outside the nnunetv2 package, since it's shared
+# with segmentation_uncertainty_quantification (a separate package with no dependency on this
+# one) - reached by path, not a normal package import. See that file's own docstring for why.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from dataset_compressed_io import resolve as _resolve_compressed
+
 
 DATASET_NAME = "Dataset260_BS80KLesionBoneMT"
-DEFAULT_DATA_ROOT = Path(r"C:\Users\lulay\Desktop\wbbs-dataset")
-DEFAULT_OUTPUT_ROOT = Path(r"C:\Users\lulay\Desktop\nnunetv2-multitask\data\nnUNet_raw")
+DEFAULT_DATA_ROOT = Path(r"C:\research\research-wbbs-multitask_uq\dataset\source")
+DEFAULT_OUTPUT_ROOT = Path(r"C:\research\research-wbbs-multitask_uq\dataset\nnunet\nnUNet_raw")
 IMAGE_SIZE = (256, 1024)  # PIL uses width, height.
 
 
@@ -26,22 +35,44 @@ def _id_from_name(path: Path) -> str:
     match = re.search(r"(\d+)", path.stem)
     if not match:
         raise ValueError(f"Cannot extract numeric id from {path}.")
-    return match.group(1).zfill(4)
+    return str(int(match.group(1))).zfill(4)
 
 
-def _files_by_id(folder: Path, suffixes: Tuple[str, ...]) -> Dict[str, Path]:
-    files = {}
-    for suffix in suffixes:
-        for path in folder.glob(f"*{suffix}"):
-            files[_id_from_name(path)] = path
-    return files
+def _nested_view_files(root: Path, extension: str) -> Dict[str, Dict[str, Path]]:
+    """root/patient_NNNNN/study_NNNNN/{anterior,posterior}{extension} -> {4-digit id: {view: Path}}.
+
+    Real BS-80K layout since research-wbbs-dataset's 2026-08-08 reorganization: one study directory
+    per patient, view name is the whole filename. Patient numbering is sparse, discovered rather than
+    assumed.
+    """
+    result: Dict[str, Dict[str, Path]] = {}
+    for patient_dir in sorted(root.glob("patient_*")):
+        patient_id = _id_from_name(patient_dir)
+        study_dirs = sorted(patient_dir.glob("study_*"))
+        if not study_dirs:
+            continue
+        views = {}
+        for view_name in ("anterior", "posterior"):
+            logical = study_dirs[0] / f"{view_name}{extension}"
+            try:
+                views[view_name] = _resolve_compressed(logical)
+            except FileNotFoundError:
+                continue
+        if views:
+            result[patient_id] = views
+    return result
 
 
 def _read_invalid_ids(invalid_xlsx: Path) -> Set[str]:
-    if not invalid_xlsx.is_file():
+    try:
+        resolved = _resolve_compressed(invalid_xlsx)
+    except FileNotFoundError:
         return set()
     invalid_ids = set()
-    sheets = pd.read_excel(invalid_xlsx, sheet_name=None, header=None)
+    if resolved.suffix.lower() == ".bz2":
+        sheets = pd.read_excel(io.BytesIO(bz2.decompress(resolved.read_bytes())), sheet_name=None, header=None)
+    else:
+        sheets = pd.read_excel(resolved, sheet_name=None, header=None)
     for sheet in sheets.values():
         for value in sheet.iloc[1:, 0].to_numpy().ravel():
             if pd.isna(value):
@@ -74,7 +105,10 @@ def _copy_image_as_png(src: Path, dst: Path) -> None:
 
 def _copy_label_png(src: Path, dst: Path, allowed_labels: Iterable[int]) -> None:
     _ensure_png_l(src, allowed_labels, IMAGE_SIZE)
-    shutil.copy2(src, dst)
+    # Decode + re-save rather than a raw byte copy: src is whatever the compressor resolved
+    # (e.g. anterior.png.png), not necessarily already a final-form file at dst's expected name.
+    with Image.open(src) as img:
+        img.save(dst)
 
 
 def _write_background_label(dst: Path) -> None:
@@ -111,18 +145,21 @@ def convert_bs80k_to_nnunet_raw(
     dataset_name: str = DATASET_NAME,
     overwrite: bool = False,
 ) -> Path:
-    raw_ant = data_root / "bs80k-imaging-raw" / "wholeBodyANT"
-    raw_post = data_root / "bs80k-imaging-raw" / "wholeBodyPOST"
-    bone_root = data_root / "bs80k-bone_region-segmentation" / "pseudo_label-2607"
-    lesion_root = data_root / "bs80k-lesion-segmentation" / "otsu_morphology-guarded_smooth"
-    invalid_xlsx = data_root / "bs80k-invalid_list.xlsx"
+    raw_root = data_root / "bs80k" / "data" / "whole_body-raster-raw"
+    bone_root = data_root / "bs80k" / "labels" / "bone_region-segmentation" / "pseudo_label-2607"
+    lesion_root = data_root / "bs80k" / "labels" / "whole_body-lesion-segmentation" / "otsu_morphology-guarded_smooth"
+    invalid_xlsx = data_root / "bs80k" / "data" / "archive" / "bs80k-invalid_list.xlsx"
 
-    ant_images = _files_by_id(raw_ant, (".jpg", ".jpeg", ".png"))
-    post_images = _files_by_id(raw_post, (".jpg", ".jpeg", ".png"))
-    bone_ant = _files_by_id(bone_root / "anterior", (".png",))
-    bone_post = _files_by_id(bone_root / "posterior", (".png",))
-    lesion_ant = _files_by_id(lesion_root / "anterior", (".png",))
-    lesion_post = _files_by_id(lesion_root / "posterior", (".png",))
+    raw_views = _nested_view_files(raw_root, ".jpg")
+    bone_views = _nested_view_files(bone_root, ".png")
+    lesion_views = _nested_view_files(lesion_root, ".png")
+
+    ant_images = {pid: v["anterior"] for pid, v in raw_views.items() if "anterior" in v}
+    post_images = {pid: v["posterior"] for pid, v in raw_views.items() if "posterior" in v}
+    bone_ant = {pid: v["anterior"] for pid, v in bone_views.items() if "anterior" in v}
+    bone_post = {pid: v["posterior"] for pid, v in bone_views.items() if "posterior" in v}
+    lesion_ant = {pid: v["anterior"] for pid, v in lesion_views.items() if "anterior" in v}
+    lesion_post = {pid: v["posterior"] for pid, v in lesion_views.items() if "posterior" in v}
     invalid_ids = _read_invalid_ids(invalid_xlsx)
 
     paired_raw_ids = sorted(set(ant_images) & set(post_images))

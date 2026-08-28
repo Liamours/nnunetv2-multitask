@@ -13,7 +13,7 @@ from nnunetv2.dataset_conversion.Dataset260_BS80KLesionBoneMT import (
     IMAGE_SIZE,
     _copy_image_as_png,
     _copy_label_png,
-    _files_by_id,
+    _nested_view_files,
     _read_invalid_ids,
     _split_ids,
     _write_background_label,
@@ -37,15 +37,17 @@ def convert_bs80k_lesion_only_to_nnunet_raw(
     dataset_name: str = DATASET_NAME,
     overwrite: bool = False,
 ) -> Path:
-    raw_ant = data_root / "bs80k-imaging-raw" / "wholeBodyANT"
-    raw_post = data_root / "bs80k-imaging-raw" / "wholeBodyPOST"
-    lesion_root = data_root / "bs80k-lesion-segmentation" / "otsu_morphology-guarded_smooth"
-    invalid_xlsx = data_root / "bs80k-invalid_list.xlsx"
+    raw_root = data_root / "bs80k" / "data" / "whole_body-raster-raw"
+    lesion_root = data_root / "bs80k" / "labels" / "whole_body-lesion-segmentation" / "otsu_morphology-guarded_smooth"
+    invalid_xlsx = data_root / "bs80k" / "data" / "archive" / "bs80k-invalid_list.xlsx"
 
-    ant_images = _files_by_id(raw_ant, (".jpg", ".jpeg", ".png"))
-    post_images = _files_by_id(raw_post, (".jpg", ".jpeg", ".png"))
-    lesion_ant = _files_by_id(lesion_root / "anterior", (".png",))
-    lesion_post = _files_by_id(lesion_root / "posterior", (".png",))
+    raw_views = _nested_view_files(raw_root, ".jpg")
+    lesion_views = _nested_view_files(lesion_root, ".png")
+
+    ant_images = {pid: v["anterior"] for pid, v in raw_views.items() if "anterior" in v}
+    post_images = {pid: v["posterior"] for pid, v in raw_views.items() if "posterior" in v}
+    lesion_ant = {pid: v["anterior"] for pid, v in lesion_views.items() if "anterior" in v}
+    lesion_post = {pid: v["posterior"] for pid, v in lesion_views.items() if "posterior" in v}
     invalid_ids = _read_invalid_ids(invalid_xlsx)
 
     paired_raw_ids = sorted(set(ant_images) & set(post_images))
