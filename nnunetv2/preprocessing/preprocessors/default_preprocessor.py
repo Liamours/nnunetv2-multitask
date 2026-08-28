@@ -28,6 +28,7 @@ from nnunetv2.preprocessing.cropping.cropping import crop_to_nonzero
 from nnunetv2.preprocessing.resampling.default_resampling import compute_new_shape
 from nnunetv2.training.dataloading.nnunet_dataset import nnUNetDatasetBlosc2, comp_blosc2_params
 from nnunetv2.utilities.dataset_name_id_conversion import maybe_convert_to_dataset_name
+from nnunetv2.utilities.multitask_dataset import is_multitask_dataset, sample_multitask_foreground_locations
 from nnunetv2.utilities.find_class_by_name import recursive_find_python_class
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager, ConfigurationManager
 from nnunetv2.utilities.utils import get_filenames_of_train_images_and_targets
@@ -97,18 +98,27 @@ class DefaultPreprocessor(object):
             # with a LabelManager Instance in this function because that's all its used for. Dunno what's better.
             # LabelManager is pretty light computation-wise.
             label_manager = plans_manager.get_label_manager(dataset_json)
-            collect_for_this = label_manager.foreground_regions if label_manager.has_regions \
-                else label_manager.foreground_labels
 
-            # when using the ignore label we want to sample only from annotated regions. Therefore we also need to
-            # collect samples uniformly from all classes (incl background)
-            if label_manager.has_ignore_label:
-                collect_for_this.append([-1] + label_manager.all_labels)
+            if is_multitask_dataset(dataset_json):
+                # label_manager.foreground_regions/foreground_labels here is a flat, channel-blind
+                # concatenation across ALL tasks - fine for a single exclusive integer map, wrong once
+                # any task is multichannel (independent per-channel {0,1} masks). Sample per task/
+                # channel instead; see sample_multitask_foreground_locations docstring.
+                properties['class_locations'] = sample_multitask_foreground_locations(
+                    seg, dataset_json, verbose=self.verbose)
+            else:
+                collect_for_this = label_manager.foreground_regions if label_manager.has_regions \
+                    else label_manager.foreground_labels
 
-            # no need to filter background in regions because it is already filtered in handle_labels
-            # print(all_labels, regions)
-            properties['class_locations'] = self._sample_foreground_locations(seg, collect_for_this,
-                                                                                   verbose=self.verbose)
+                # when using the ignore label we want to sample only from annotated regions. Therefore we also need to
+                # collect samples uniformly from all classes (incl background)
+                if label_manager.has_ignore_label:
+                    collect_for_this.append([-1] + label_manager.all_labels)
+
+                # no need to filter background in regions because it is already filtered in handle_labels
+                # print(all_labels, regions)
+                properties['class_locations'] = self._sample_foreground_locations(seg, collect_for_this,
+                                                                                       verbose=self.verbose)
             seg = self.modify_seg_fn(seg, plans_manager, dataset_json, configuration_manager)
         if np.max(seg) > 127:
             seg = seg.astype(np.int16)

@@ -21,16 +21,20 @@ class MultiTaskLabelManager(object):
         self.regions_class_order = regions_class_order
         self.task_label_managers: Dict[str, LabelManager] = {}
         self.task_order: List[str] = []
+        self._multichannel_tasks: Dict[str, bool] = {}
 
         for idx, (task_name, task_config) in enumerate(multitask_tasks.items()):
             task_regions = task_config.get("regions_class_order")
             task_labels = task_config["labels"]
+            is_multichannel = bool(task_config.get("multichannel", False))
             self.task_label_managers[task_name] = LabelManager(
                 task_labels,
                 task_regions,
                 force_use_labels=force_use_labels,
                 inference_nonlin=inference_nonlin,
+                force_use_regions=is_multichannel,
             )
+            self._multichannel_tasks[task_name] = is_multichannel
             self.task_order.append(task_name)
 
         if len(self.task_order) < 1:
@@ -87,5 +91,20 @@ class MultiTaskLabelManager(object):
     def task_num_segmentation_heads(self) -> Dict[str, int]:
         return {
             task_name: manager.num_segmentation_heads
+            for task_name, manager in self.task_label_managers.items()
+        }
+
+    def is_multichannel_task(self, task_name: str) -> bool:
+        return self._multichannel_tasks.get(task_name, False)
+
+    def task_num_raw_channels(self) -> Dict[str, int]:
+        """How many channels each task occupies in the raw/loaded (pre-loss) target tensor.
+
+        1 for standard tasks (a single exclusive integer map, expanded to num_segmentation_heads
+        only inside the CE loss via argmax comparison) - N for multichannel tasks, whose raw
+        storage already IS the N independent per-class channels the BCE loss consumes directly.
+        """
+        return {
+            task_name: (manager.num_segmentation_heads if self._multichannel_tasks.get(task_name, False) else 1)
             for task_name, manager in self.task_label_managers.items()
         }

@@ -22,7 +22,7 @@ from batchgenerators.utilities.file_and_folder_operations import *
 from nnunetv2.paths import nnUNet_raw
 from nnunetv2.utilities.multitask_dataset import (
     get_paired_multitask_filenames,
-    is_paired_multiview_multitask_dataset,
+    is_multitask_dataset,
 )
 
 
@@ -62,7 +62,7 @@ def get_filenames_of_train_images_and_targets(raw_dataset_folder: str, dataset_j
     if dataset_json is None:
         dataset_json = load_json(join(raw_dataset_folder, 'dataset.json'))
 
-    if is_paired_multiview_multitask_dataset(dataset_json):
+    if is_multitask_dataset(dataset_json):
         return get_paired_multitask_filenames(raw_dataset_folder, dataset_json)
 
     if 'dataset' in dataset_json.keys():

@@ -12,7 +12,7 @@ from nnunetv2.imageio.reader_writer_registry import determine_reader_writer_from
 from nnunetv2.paths import nnUNet_raw, nnUNet_preprocessed
 from nnunetv2.preprocessing.cropping.cropping import crop_to_nonzero
 from nnunetv2.utilities.dataset_name_id_conversion import maybe_convert_to_dataset_name
-from nnunetv2.utilities.multitask_dataset import load_multitask_label_stack, make_multitask_union_label
+from nnunetv2.utilities.multitask_dataset import load_multitask_union_label
 from nnunetv2.utilities.utils import get_filenames_of_train_images_and_targets
 
 
@@ -94,8 +94,9 @@ class DatasetFingerprintExtractor(object):
         rw = reader_writer_class()
         images, properties_images = rw.read_images(image_files)
         if isinstance(segmentation_file, dict):
-            label_stack = load_multitask_label_stack(segmentation_file, rw)
-            segmentation = make_multitask_union_label(label_stack)
+            # streaming union - the fingerprint only needs the foreground mask, and materializing all
+            # channels at once OOMs on many-channel 3D data (SegRap2023: 47 ch at 127x1024x1024)
+            segmentation = load_multitask_union_label(segmentation_file, rw)
         else:
             segmentation, _ = rw.read_seg(segmentation_file)
 

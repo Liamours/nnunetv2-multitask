@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 class LabelManager(object):
     def __init__(self, label_dict: dict, regions_class_order: Union[List[int], None], force_use_labels: bool = False,
-                 inference_nonlin=None):
+                 inference_nonlin=None, force_use_regions: bool = False):
         self._sanity_check(label_dict)
         self.label_dict = label_dict
         self.regions_class_order = regions_class_order
@@ -28,6 +28,11 @@ class LabelManager(object):
 
         if force_use_labels:
             self._has_regions = False
+        elif force_use_regions:
+            # for tasks whose raw storage is already N independent per-class channels (not derived
+            # from a single exclusive integer map) - every non-background label is its own "region"
+            # of size 1, which the tuple-based auto-detection below can't see on its own.
+            self._has_regions = True
         else:
             self._has_regions: bool = any(
                 [isinstance(i, (tuple, list)) and len(i) > 1 for i in self.label_dict.values()])

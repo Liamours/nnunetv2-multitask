@@ -14,7 +14,7 @@ from nnunetv2.experiment_planning.verify_multitask_dataset_integrity import veri
 from nnunetv2.paths import nnUNet_raw, nnUNet_preprocessed
 from nnunetv2.utilities.dataset_name_id_conversion import convert_id_to_dataset_name
 from nnunetv2.utilities.find_class_by_name import recursive_find_python_class
-from nnunetv2.utilities.multitask_dataset import is_paired_multiview_multitask_dataset
+from nnunetv2.utilities.multitask_dataset import is_multitask_dataset
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
 from nnunetv2.utilities.utils import get_filenames_of_train_images_and_targets
 
@@ -33,7 +33,7 @@ def extract_fingerprint_dataset(dataset_id: int,
 
     if check_dataset_integrity:
         dataset_json = load_json(join(nnUNet_raw, dataset_name, "dataset.json"))
-        if is_paired_multiview_multitask_dataset(dataset_json):
+        if is_multitask_dataset(dataset_json):
             verify_paired_multitask_dataset_integrity(join(nnUNet_raw, dataset_name))
         else:
             verify_dataset_integrity(join(nnUNet_raw, dataset_name), num_processes)
@@ -159,8 +159,8 @@ def preprocess_dataset(dataset_id: int,
     # longer there (useful for compute cluster where only the preprocessed data is available)
     maybe_mkdir_p(join(nnUNet_preprocessed, dataset_name, 'gt_segmentations'))
     dataset_json = load_json(join(nnUNet_raw, dataset_name, 'dataset.json'))
-    if is_paired_multiview_multitask_dataset(dataset_json):
-        print("Skipping default gt_segmentations copy for paired multitask labels.")
+    if is_multitask_dataset(dataset_json):
+        print("Skipping default gt_segmentations copy for multitask labels.")
         return
     dataset = get_filenames_of_train_images_and_targets(join(nnUNet_raw, dataset_name), dataset_json)
     for k in dataset:

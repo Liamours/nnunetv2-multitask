@@ -8,6 +8,7 @@ from nnunetv2.experiment_planning.experiment_planners.multitask_experiment_plann
 from nnunetv2.experiment_planning.plan_and_preprocess_api import plan_experiment_dataset
 from nnunetv2.experiment_planning.plan_and_preprocess_entrypoints import _parse_multitask_tasks
 from nnunetv2.training.nnUNetTrainer.nnUNetTrainerMultiTask import nnUNetTrainerMultiTask
+from nnunetv2.utilities.multitask_dataset import is_multitask_dataset, is_paired_multiview_multitask_dataset
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
 
 
@@ -144,12 +145,54 @@ class TestMultiTaskPlans(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "different task names"):
             nnUNetTrainerMultiTask(make_trainer_test_plans(), "3d_fullres", 0, dataset_json, device=torch.device("cpu"))
 
+    def test_is_multitask_dataset_covers_paired_and_single_image_alike(self):
+        single_image = make_test_dataset_json()  # no case_unit at all, tasks defined
+        self.assertTrue(is_multitask_dataset(single_image))
+        self.assertFalse(is_paired_multiview_multitask_dataset(single_image))
+
+        single_image_explicit = deepcopy(single_image)
+        single_image_explicit["multitask"]["case_unit"] = "single_image"
+        single_image_explicit["multitask"]["views"] = ["image"]
+        self.assertTrue(is_multitask_dataset(single_image_explicit))
+        self.assertFalse(is_paired_multiview_multitask_dataset(single_image_explicit))
+
+        paired = deepcopy(single_image)
+        paired["multitask"]["case_unit"] = "paired_anterior_posterior"
+        paired["multitask"]["views"] = ["anterior", "posterior"]
+        self.assertTrue(is_multitask_dataset(paired))
+        self.assertTrue(is_paired_multiview_multitask_dataset(paired))
+
+        not_multitask = {"channel_names": {"0": "image"}, "labels": {"background": 0, "fg": 1}}
+        self.assertFalse(is_multitask_dataset(not_multitask))
+        self.assertFalse(is_paired_multiview_multitask_dataset(not_multitask))
+
     def test_trainer_rejects_plan_dataset_json_head_count_mismatch(self):
         dataset_json = deepcopy(make_test_dataset_json())
         dataset_json["multitask"]["tasks"]["task2"]["labels"] = {"background": 0, "organ_a": 1}
 
         with self.assertRaisesRegex(ValueError, "num_classes must match"):
             nnUNetTrainerMultiTask(make_trainer_test_plans(), "3d_fullres", 0, dataset_json, device=torch.device("cpu"))
+
+    def test_multichannel_task_reports_regions_and_raw_channel_count(self):
+        # ChestX-Det/SegRap2023 shape: independently-overlapping per-class channels within one
+        # task (not derivable from a single exclusive integer map like BS-80K's bone regions).
+        dataset_json = make_test_dataset_json()
+        dataset_json["multitask"]["tasks"]["task2"] = {
+            "labels": {"background": 0, "organ_a": 1, "organ_b": 2, "organ_c": 3},
+            "regions_class_order": [1, 2, 3],
+            "multichannel": True,
+        }
+        plans_manager = PlansManager(make_test_plans())
+        label_manager = plans_manager.get_label_manager(dataset_json)
+
+        self.assertFalse(label_manager.is_multichannel_task("task1"))
+        self.assertTrue(label_manager.is_multichannel_task("task2"))
+        self.assertEqual(label_manager.task_num_raw_channels(), {"task1": 1, "task2": 3})
+        self.assertEqual(label_manager.task_num_segmentation_heads(), {"task1": 2, "task2": 3})
+
+        task2_manager = label_manager.get_task_label_manager("task2")
+        self.assertTrue(task2_manager.has_regions)
+        self.assertEqual(task2_manager.inference_nonlin, torch.sigmoid)
 
 
 if __name__ == "__main__":
