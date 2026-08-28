@@ -10,11 +10,10 @@ from nnunetv2.training.nnUNetTrainer.nnUNetTrainer import nnUNetTrainer
 from nnunetv2.utilities.get_network_from_plans import get_network_from_plans
 from nnunetv2.utilities.label_handling.label_handling import determine_num_input_channels
 from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
+from wbbs_lguq.paths import EVALUATIONS, NNUNET_RESULTS
 
-
-ROOT = Path(r"C:\Users\lulay\Desktop\nnunetv2-multitask")
-RESULTS = ROOT / "data" / "nnUNet_results"
-CONTEXT = ROOT / "context"
+RESULTS = NNUNET_RESULTS
+EVAL_OUT = EVALUATIONS
 
 MODELS = {
     "A1_lesion_only": RESULTS / "Dataset261_BS80KLesionOnly" / "nnUNetTrainerMultiTask_100epochs__nnUNetPlansA1Lesion2GB__2d",
@@ -166,9 +165,9 @@ def main():
             del bench_model
             torch.cuda.empty_cache()
 
-    CONTEXT.mkdir(parents=True, exist_ok=True)
-    json_path = CONTEXT / "model-efficiency-audit.json"
-    md_path = CONTEXT / "model-efficiency-audit.md"
+    EVAL_OUT.mkdir(parents=True, exist_ok=True)
+    json_path = EVAL_OUT / "model-efficiency-audit.json"
+    md_path = EVAL_OUT / "model-efficiency-audit.md"
     payload = {"models": rows, "benchmarks": bench_rows}
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 

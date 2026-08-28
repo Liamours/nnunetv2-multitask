@@ -1,13 +1,16 @@
 $ErrorActionPreference = 'Stop'
 
-$repoRoot = 'C:\Users\lulay\Desktop\nnunetv2-multitask\repo\nnunetv2-multitask'
-$dataRoot = 'C:\Users\lulay\Desktop\nnunetv2-multitask\data'
+$__d = $PSScriptRoot
+while (-not (Test-Path (Join-Path $__d 'dataset_paths.ps1'))) { $__d = Split-Path $__d -Parent }
+. (Join-Path $__d 'dataset_paths.ps1')
+
+$repoRoot = Join-Path $Workspace "repo\nnunetv2_multitask"
 $logDir = Join-Path $repoRoot 'training_logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
-$env:nnUNet_raw = Join-Path $dataRoot 'nnUNet_raw'
-$env:nnUNet_preprocessed = Join-Path $dataRoot 'nnUNet_preprocessed'
-$env:nnUNet_results = Join-Path $dataRoot 'nnUNet_results'
+$env:nnUNet_raw = $NNUNetRaw
+$env:nnUNet_preprocessed = $NNUNetPreprocessed
+$env:nnUNet_results = $NNUNetResults
 # Twelve augmentation workers exhaust host memory while reading Blosc2 arrays on this 16 GiB machine.
 # This limits loader concurrency only; it does not alter the saved plans or augmentation transforms.
 $env:nnUNet_n_proc_DA = '2'
@@ -17,13 +20,13 @@ $runs = @(
         Name = 'A2_cbam_full_20260713'
         Dataset = '260'
         Plan = 'nnUNetPlansA2ControlledBatch4CBAM'
-        ResultDir = 'C:\Users\lulay\Desktop\nnunetv2-multitask\data\nnUNet_results\Dataset260_BS80KLesionBoneMT\nnUNetTrainerMultiTask_100epochs__nnUNetPlansA2ControlledBatch4CBAM__2d\fold_0'
+        ResultDir = Join-Path $NNUNetResults 'Dataset260_BS80KLesionBoneMT\nnUNetTrainerMultiTask_100epochs__nnUNetPlansA2ControlledBatch4CBAM__2d\fold_0'
     },
     @{
         Name = 'A3_cbam_full_20260713'
         Dataset = '260'
         Plan = 'nnUNetPlansA3ControlledBatch4CBAM'
-        ResultDir = 'C:\Users\lulay\Desktop\nnunetv2-multitask\data\nnUNet_results\Dataset260_BS80KLesionBoneMT\nnUNetTrainerMultiTask_100epochs__nnUNetPlansA3ControlledBatch4CBAM__2d\fold_0'
+        ResultDir = Join-Path $NNUNetResults 'Dataset260_BS80KLesionBoneMT\nnUNetTrainerMultiTask_100epochs__nnUNetPlansA3ControlledBatch4CBAM__2d\fold_0'
     }
 )
 

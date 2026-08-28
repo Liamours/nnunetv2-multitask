@@ -1,13 +1,16 @@
 $ErrorActionPreference = 'Stop'
 
-$repoRoot = 'C:\Users\lulay\Desktop\nnunetv2-multitask\repo\nnunetv2-multitask'
-$dataRoot = 'C:\Users\lulay\Desktop\nnunetv2-multitask\data'
+$__d = $PSScriptRoot
+while (-not (Test-Path (Join-Path $__d 'dataset_paths.ps1'))) { $__d = Split-Path $__d -Parent }
+. (Join-Path $__d 'dataset_paths.ps1')
+
+$repoRoot = Join-Path $Workspace "repo\nnunetv2_multitask"
 $logDir = Join-Path $repoRoot 'training_logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
-$env:nnUNet_raw = Join-Path $dataRoot 'nnUNet_raw'
-$env:nnUNet_preprocessed = Join-Path $dataRoot 'nnUNet_preprocessed'
-$env:nnUNet_results = Join-Path $dataRoot 'nnUNet_results'
+$env:nnUNet_raw = $NNUNetRaw
+$env:nnUNet_preprocessed = $NNUNetPreprocessed
+$env:nnUNet_results = $NNUNetResults
 
 $runs = @(
     @{

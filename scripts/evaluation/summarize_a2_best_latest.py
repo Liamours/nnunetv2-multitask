@@ -1,9 +1,9 @@
 import csv
 import json
-from pathlib import Path
 
+from wbbs_lguq.paths import EVALUATIONS
 
-EVAL_ROOT = Path(r"C:\Users\lulay\Desktop\nnunetv2-multitask\data\evaluation\a2_dual_head_100epoch_best_latest")
+EVAL_ROOT = EVALUATIONS / "a2_dual_head_100epoch_best_latest"
 
 BONE_NAMES = {
     "label_1": "Skull",

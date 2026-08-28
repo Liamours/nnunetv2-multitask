@@ -4,7 +4,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = "C:\Users\lulay\Desktop\nnunetv2-multitask\repo\nnunetv2-multitask"
+$__d = $PSScriptRoot
+while (-not (Test-Path (Join-Path $__d 'dataset_paths.ps1'))) { $__d = Split-Path $__d -Parent }
+. (Join-Path $__d 'dataset_paths.ps1')
+
+$repoRoot = Join-Path $Workspace "repo\nnunetv2_multitask"
 Set-Location -LiteralPath $repoRoot
 
 $runs = @(

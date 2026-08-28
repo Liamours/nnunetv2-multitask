@@ -1,6 +1,10 @@
 $ErrorActionPreference = "Stop"
 
-$dataRoot = "C:\Users\lulay\Desktop\nnunetv2-multitask\data\nnUNet_preprocessed"
+$__d = $PSScriptRoot
+while (-not (Test-Path (Join-Path $__d 'dataset_paths.ps1'))) { $__d = Split-Path $__d -Parent }
+. (Join-Path $__d 'dataset_paths.ps1')
+
+$dataRoot = $NNUNetPreprocessed
 $aliases = @(
     @{ Dataset = "Dataset261_BS80KLesionOnly"; Source = "nnUNetPlansA1Lesion2GB"; Alias = "nnUNetPlans_A1_SingleTask_B4" },
     @{ Dataset = "Dataset261_BS80KLesionOnly"; Source = "nnUNetPlansA1ControlledBatch4CBAM"; Alias = "nnUNetPlans_A1_SingleTask_CBAM_B4" },

@@ -18,12 +18,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
+from wbbs_lguq.paths import NNUNET_RESULTS
 
 
-DEFAULT_MODEL_DIR = Path(
-    r"C:\Users\lulay\Desktop\nnunetv2-multitask\data\nnUNet_results"
-    r"\Dataset260_BS80KLesionBoneMT"
-    r"\nnUNetTrainerMultiTask_100epochs__nnUNetPlansMultiTask2GB__2d"
+DEFAULT_MODEL_DIR = (
+    NNUNET_RESULTS
+    / "Dataset260_BS80KLesionBoneMT"
+    / "nnUNetTrainerMultiTask_100epochs__nnUNetPlansMultiTask2GB__2d"
 )
 DEFAULT_CHECKPOINT = DEFAULT_MODEL_DIR / "fold_0" / "checkpoint_best.pth"
 DEFAULT_PLANS = DEFAULT_MODEL_DIR / "plans.json"

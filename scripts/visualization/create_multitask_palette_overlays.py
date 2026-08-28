@@ -3,13 +3,11 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+from wbbs_lguq.paths import EVALUATIONS, NNUNET_RAW, VISUALIZATIONS
 
-
-PROJECT_ROOT = Path(r"C:\Users\lulay\Desktop\nnunetv2-multitask")
-DATA_ROOT = PROJECT_ROOT / "data"
-RAW_DATASET = DATA_ROOT / "nnUNet_raw" / "Dataset260_BS80KLesionBoneMT"
-EVAL_ROOT = DATA_ROOT / "evaluation" / "a2_dual_head_100epoch_best_latest"
-OUT_ROOT = DATA_ROOT / "visualizations" / "a2_dual_head_100epoch_test_palette_overlay"
+RAW_DATASET = NNUNET_RAW / "Dataset260_BS80KLesionBoneMT"
+EVAL_ROOT = EVALUATIONS / "a2_dual_head_100epoch_best_latest"
+OUT_ROOT = VISUALIZATIONS / "a2_dual_head_100epoch_test_palette_overlay"
 
 VIEWS = ("anterior", "posterior")
 RUNS = {
