@@ -30,7 +30,7 @@ keywords = [
     'nnunet'
 ]
 dependencies = [
-    "torch==2.5.1+cu121",
+    "torch>=2.7",
     "acvl-utils>=0.2.6,<0.3",  # 0.3 may bring breaking changes. Careful!
     "dynamic-network-architectures>=0.4.4,<0.5",
     "tqdm",
@@ -53,7 +53,8 @@ dependencies = [
     "batchgeneratorsv2>=0.3.2",
     "einops",
     "blosc2>=3.3.2",
-    "transformers>=4.41"
+    "transformers>=4.41",
+    "wbbs-lguq",
 ]
 
 [project.urls]
@@ -94,11 +95,12 @@ dev = [
 ]
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu121" }
+torch = { index = "pytorch-cu128" }
+wbbs-lguq = { path = "../segmentation_uncertainty_quantification", editable = true }
 
 [[tool.uv.index]]
-name = "pytorch-cu121"
-url = "https://download.pytorch.org/whl/cu121"
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.setuptools.packages.find]

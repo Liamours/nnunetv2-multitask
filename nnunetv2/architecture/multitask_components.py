@@ -57,6 +57,9 @@ class FeatureUNetDecoder(nn.Module):
         use_cbam = bool(cbam.get("enabled", False)) and bool(cbam.get("decoder", True))
         cbam_reduction = int(cbam.get("reduction", cbam.get("reduction_ratio", 16)))
         cbam_spatial_kernel_size = int(cbam.get("spatial_kernel_size", 7))
+        # See cbam.py's CBAM.__init__ docstring comment: off by default, only set when testing the
+        # post-gate-normalization hypothesis.
+        cbam_post_norm = bool(cbam.get("post_norm", False))
         for s in range(self.stage_range[0] + 1, self.stage_range[1] + 1):
             input_features_below = encoder.output_channels[-s]
             input_features_skip = encoder.output_channels[-(s + 1)]
@@ -89,7 +92,14 @@ class FeatureUNetDecoder(nn.Module):
                 )
             )
             attention_blocks.append(
-                CBAM(encoder.conv_op, input_features_skip, cbam_reduction, cbam_spatial_kernel_size)
+                CBAM(
+                    encoder.conv_op,
+                    input_features_skip,
+                    cbam_reduction,
+                    cbam_spatial_kernel_size,
+                    norm_op=norm_op if cbam_post_norm else None,
+                    norm_op_kwargs=norm_op_kwargs if cbam_post_norm else None,
+                )
                 if use_cbam
                 else nn.Identity()
             )

@@ -26,8 +26,8 @@ from dataset_compressed_io import resolve as _resolve_compressed
 
 
 DATASET_NAME = "Dataset260_BS80KLesionBoneMT"
-DEFAULT_DATA_ROOT = Path(r"C:\research\research-wbbs-multitask_uq\dataset\source")
-DEFAULT_OUTPUT_ROOT = Path(r"C:\research\research-wbbs-multitask_uq\dataset\nnunet\nnUNet_raw")
+DEFAULT_DATA_ROOT = Path(r"C:\rifqi\research-wbbs-multitask_uq\dataset\source")
+DEFAULT_OUTPUT_ROOT = Path(r"C:\rifqi\research-wbbs-multitask_uq\dataset\nnunet\nnUNet_raw")
 IMAGE_SIZE = (256, 1024)  # PIL uses width, height.
 
 

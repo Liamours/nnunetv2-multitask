@@ -10,6 +10,10 @@ class MultiTaskLoss(nn.Module):
         self.task_losses = nn.ModuleDict(task_losses)
         self.task_weights = task_weights
         self.deep_supervision_weights = deep_supervision_weights
+        # Diagnostic side channel only, read by nnUNetTrainerMultiTaskCBAMDiagnostic_5epochs - the
+        # unweighted per-task scalar is not otherwise observable once summed into the combined loss
+        # returned below. Written every forward call, harmless when nothing reads it.
+        self.last_task_losses: Dict[str, float] = {}
 
     def _compute_task_loss(self, task_name: str, output, target):
         task_loss = self.task_losses[task_name]
@@ -27,6 +31,8 @@ class MultiTaskLoss(nn.Module):
     def forward(self, outputs: Dict[str, Union[torch.Tensor, List[torch.Tensor]]], targets: Dict[str, Union[torch.Tensor, List[torch.Tensor]]]):
         loss = None
         for task_name, output in outputs.items():
-            task_loss = self._compute_task_loss(task_name, output, targets[task_name]) * self.task_weights[task_name]
+            unweighted = self._compute_task_loss(task_name, output, targets[task_name])
+            self.last_task_losses[task_name] = float(unweighted.detach())
+            task_loss = unweighted * self.task_weights[task_name]
             loss = task_loss if loss is None else loss + task_loss
         return loss

@@ -91,7 +91,10 @@ def load_multitask_label_stack(label_paths: Dict[str, List[str]], reader_writer,
 
 
 def make_multitask_union_label(label_stack: np.ndarray) -> np.ndarray:
-    union = np.max(label_stack > 0, axis=0, keepdims=True).astype(np.uint8)
+    # int8, not uint8: crop_to_nonzero (nnunetv2/preprocessing/cropping/cropping.py) writes its -1
+    # ignore-label sentinel into this array, which uint8 cannot hold. Matches crop_to_nonzero's own
+    # int8 choice for the same purpose.
+    union = np.max(label_stack > 0, axis=0, keepdims=True).astype(np.int8)
     return union
 
 
@@ -113,7 +116,9 @@ def load_multitask_union_label(label_paths: Dict[str, List[str]], reader_writer,
             seg, _ = reader_writer.read_seg(label_file)
             if expected_shape is None:
                 expected_shape = seg.shape[1:]
-                union = np.zeros((1, *expected_shape), dtype=np.uint8)
+                # int8, not uint8: same reason as make_multitask_union_label above, this array
+                # eventually receives crop_to_nonzero's -1 ignore-label sentinel.
+                union = np.zeros((1, *expected_shape), dtype=np.int8)
             if seg.shape[1:] != expected_shape:
                 raise RuntimeError(
                     f"Shape mismatch in multitask labels. Expected {expected_shape}, got {seg.shape[1:]} for {label_file}."

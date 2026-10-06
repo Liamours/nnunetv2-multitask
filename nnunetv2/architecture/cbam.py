@@ -60,13 +60,20 @@ class CBAM(nn.Module):
         channels: int,
         reduction: int = 16,
         spatial_kernel_size: int = 7,
+        norm_op: Type[nn.Module] = None,
+        norm_op_kwargs: dict = None,
     ):
         super().__init__()
         self.channel_attention = ChannelAttention(conv_op, channels, reduction)
         self.spatial_attention = SpatialAttention(conv_op, spatial_kernel_size)
+        # Hypothesis test (context/experiments/nnunetcbam-single-training-collapse.md): the gated
+        # output feeds straight into the next decoder stage with nothing to cancel a uniform
+        # (non-content-dependent) shift in signal magnitude. Off by default (norm_op=None ->
+        # Identity) so every existing CBAM config is unchanged; only set when testing this fix.
+        self.norm = norm_op(channels, **(norm_op_kwargs or {})) if norm_op is not None else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.spatial_attention(self.channel_attention(x))
+        return self.norm(self.spatial_attention(self.channel_attention(x)))
 
     def compute_conv_feature_map_size(self, spatial_size):
         return (
