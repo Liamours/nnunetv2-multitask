@@ -27,3 +27,7 @@ The fork should stay generic. WBS lesion/bone segmentation is a downstream use c
 ## Operational scripts
 
 Repository helpers are organized under [scripts/README.md](scripts/README.md). Data, checkpoints, logs, and generated evaluation artifacts remain outside the repository.
+
+## Data
+
+The masks used for training are on Zenodo: [10.5281/zenodo.23190333](https://doi.org/10.5281/zenodo.23190333), hotspot masks thresholded from the BS-80K bounding boxes and skeleton masks, manual and predicted. The scans are in BS-80K. The paper's supplementary material and code are in [Liamours/research-multitask_uq](https://github.com/Liamours/research-multitask_uq).
